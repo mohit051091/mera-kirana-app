@@ -38,18 +38,35 @@ router.post('/whatsapp', (req, res) => {
             body.entry[0].changes[0].value.messages &&
             body.entry[0].changes[0].value.messages[0]
         ) {
+            const whatsappService = require('../services/whatsapp');
+
+            // ... existing code ...
+
             const msg = body.entry[0].changes[0].value.messages[0];
             const from = msg.from;
-            const text = msg.text ? msg.text.body : 'Media/Other';
-            console.log(`Message from ${from}: ${text}`);
-        }
+            const text = msg.text ? msg.text.body : '';
+            const type = msg.type;
 
-        // Always return 200 OK to acknowledge receipt
-        res.sendStatus(200);
-    } else {
-        // Return 404 if this is not a WhatsApp API event
-        res.sendStatus(404);
-    }
-});
+            console.log(`Message from ${from}: ${text} [${type}]`);
+
+            // Handle "Hi" or "Hello"
+            if (type === 'text' && (text.toLowerCase() === 'hi' || text.toLowerCase() === 'hello')) {
+                const buttons = [
+                    { id: 'btn_products', title: '🛍️ View Products' },
+                    { id: 'btn_orders', title: '📦 My Orders' },
+                    { id: 'btn_support', title: '📞 Call Shop' }
+                ];
+                await whatsappService.sendButtons(from, "Welcome to *Mera Kirana*! 🏪\nChoose an option to start:", buttons);
+                await whatsappService.markAsRead(msg.id);
+            }
+
+
+            // Always return 200 OK to acknowledge receipt
+            res.sendStatus(200);
+        } else {
+            // Return 404 if this is not a WhatsApp API event
+            res.sendStatus(404);
+        }
+    });
 
 module.exports = router;
