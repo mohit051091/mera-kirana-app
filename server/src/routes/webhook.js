@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const whatsappService = require('../services/whatsapp');
 
 // GET /webhook/whatsapp - Verification Challenge
 router.get('/whatsapp', (req, res) => {
@@ -38,10 +39,6 @@ router.post('/whatsapp', async (req, res) => {
             body.entry[0].changes[0].value.messages &&
             body.entry[0].changes[0].value.messages[0]
         ) {
-            const whatsappService = require('../services/whatsapp');
-
-            // ... existing code ...
-
             const msg = body.entry[0].changes[0].value.messages[0];
             const from = msg.from;
             const text = msg.text ? msg.text.body : '';
@@ -49,7 +46,7 @@ router.post('/whatsapp', async (req, res) => {
 
             console.log(`Message from ${from}: ${text} [${type}]`);
 
-            // Handle "Hi" or "Hello"
+            // Handle "Hi" or "Hello" or "hi"
             if (type === 'text' && (text.toLowerCase() === 'hi' || text.toLowerCase() === 'hello')) {
                 const buttons = [
                     { id: 'btn_products', title: '🛍️ View Products' },
@@ -59,14 +56,14 @@ router.post('/whatsapp', async (req, res) => {
                 await whatsappService.sendButtons(from, "Welcome to *Mera Kirana*! 🏪\nChoose an option to start:", buttons);
                 await whatsappService.markAsRead(msg.id);
             }
-
-
-            // Always return 200 OK to acknowledge receipt
-            res.sendStatus(200);
-        } else {
-            // Return 404 if this is not a WhatsApp API event
-            res.sendStatus(404);
         }
-    });
+
+        // Always return 200 OK to acknowledge receipt
+        res.sendStatus(200);
+    } else {
+        // Return 404 if this is not a WhatsApp API event
+        res.sendStatus(404);
+    }
+});
 
 module.exports = router;
