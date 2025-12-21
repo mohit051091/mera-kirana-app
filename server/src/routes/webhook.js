@@ -24,7 +24,7 @@ router.get('/whatsapp', (req, res) => {
 });
 
 // POST /webhook/whatsapp - Incoming Messages
-router.post('/whatsapp', (req, res) => {
+router.post('/whatsapp', async (req, res) => {
     const body = req.body;
 
     // Log the entire body for debugging
