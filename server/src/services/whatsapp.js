@@ -64,6 +64,25 @@ const sendList = (to, header, body, buttonText, sections) => {
     });
 };
 
+const sendProductList = (to, body, catalogId, sections) => {
+    // sections = [{ title: 'Category Name', product_retailer_ids: ['sku_1', 'sku_2'] }]
+    return sendMessage({
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'interactive',
+        interactive: {
+            type: 'product_list',
+            header: { type: 'text', text: 'Catalog' },
+            body: { text: body },
+            footer: { text: 'Select products to add to cart' },
+            action: {
+                catalog_id: catalogId,
+                sections: sections
+            }
+        }
+    });
+};
+
 const markAsRead = (messageId) => {
     return sendMessage({
         messaging_product: 'whatsapp',
@@ -76,5 +95,6 @@ module.exports = {
     sendText,
     sendButtons,
     sendList,
+    sendProductList,
     markAsRead
 };
