@@ -73,28 +73,26 @@ router.post('/whatsapp', async (req, res) => {
                 }
 
                 // 2. SESSION & CUSTOMER MANAGEMENT
-                // Check if customer exists and when they were last active
-                const customerResult = await db.query(
-                    'SELECT customer_id, last_active FROM customers WHERE phone = $1',
-                    [from]
+                // Check if there are ANY other active logs for this user in the main table
+                // If the archive job has moved them, this will return 0, triggering a "New Session"
+                const sessionResult = await db.query(
+                    'SELECT 1 FROM conversation_logs WHERE customer_phone = $1 AND message_id != $2 LIMIT 1',
+                    [from, messageId]
                 );
 
-                let isNewSession = false;
+                let isNewSession = sessionResult.rows.length === 0;
+
+                // Ensure customer exists in DB (for profile/metadata)
+                const customerResult = await db.query('SELECT 1 FROM customers WHERE phone = $1', [from]);
                 if (customerResult.rows.length === 0) {
-                    // New Customer
                     await db.query('INSERT INTO customers (phone, name) VALUES ($1, $2)', [from, 'WhatsApp User']);
-                    isNewSession = true;
                 } else {
-                    const lastActive = customerResult.rows[0].last_active;
-                    // If no activity in 24 hours, treat as new session
-                    if (!lastActive || (Date.now() - new Date(lastActive).getTime()) > 24 * 60 * 60 * 1000) {
-                        isNewSession = true;
-                        console.log(`Session Reset for ${from} (Last active: ${lastActive})`);
-                    }
+                    await db.query('UPDATE customers SET last_active = NOW() WHERE phone = $1', [from]);
                 }
 
-                // Update last_active for the customer
-                await db.query('UPDATE customers SET last_active = NOW() WHERE phone = $1', [from]);
+                if (isNewSession) {
+                    console.log(`New Session or Archived Session detected for ${from}`);
+                }
 
                 // 3. BOT RESPONSE LOGIC
                 const welcomeMessages = ['hi', 'hello', 'hey', 'start', 'menu'];
