@@ -107,11 +107,38 @@ router.post('/whatsapp', async (req, res) => {
                     await whatsappService.sendButtons(from, "Welcome to *Mera Kirana*! 🏪\nChoose an option to start:", buttons);
                     await whatsappService.markAsRead(messageId);
                 } else if (type === 'interactive') {
-                    // Handle button clicks specifically
                     const buttonId = msg.interactive.button_reply.id;
+
                     if (buttonId === 'btn_products') {
-                        // Placeholder for product flow
-                        await whatsappService.sendMessage(from, "Fetching our product categories... 📋\n(Feature coming in Phase 5)");
+                        // 1. Fetch real categories from the database
+                        const categoriesResult = await db.query(
+                            'SELECT category_id, name, description FROM product_categories WHERE is_active = true ORDER BY sort_order ASC'
+                        );
+
+                        if (categoriesResult.rows.length === 0) {
+                            await whatsappService.sendText(from, "The shop is still being stocked! 🏪\nPlease check back in a few minutes.");
+                        } else {
+                            // 2. Format categories into high-performance WhatsApp List sections
+                            const rows = categoriesResult.rows.map(cat => ({
+                                id: `cat_${cat.category_id}`,
+                                title: cat.name.substring(0, 24), // WhatsApp title limit is 24 chars
+                                description: cat.description ? cat.description.substring(0, 72) : ''
+                            }));
+
+                            const sections = [{
+                                title: 'Available Categories',
+                                rows: rows
+                            }];
+
+                            await whatsappService.sendList(
+                                from,
+                                "📦 Our Shop",
+                                "Please select a category to view items:",
+                                "Browse Categories",
+                                sections
+                            );
+                        }
+                        await whatsappService.markAsRead(messageId);
                     }
                 }
             } catch (error) {
