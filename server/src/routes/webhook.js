@@ -65,7 +65,7 @@ router.post('/whatsapp', async (req, res) => {
 
                 // Log incoming message to prevent duplicates
                 await db.query(
-                    'INSERT INTO conversation_logs (customer_phone, message_type, message_content, message_id) VALUES ($1, $2, $3, $4)',
+                    'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4)',
                     [from, 'incoming', text, messageId]
                 );
 
