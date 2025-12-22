@@ -44,33 +44,63 @@ router.post('/whatsapp', async (req, res) => {
         ) {
             const msg = body.entry[0].changes[0].value.messages[0];
             const from = msg.from;
-            const text = msg.text ? msg.text.body : '';
             const type = msg.type;
             const messageId = msg.id;
 
-            console.log(`Message from ${from}: ${text} [${type}] ID: ${messageId}`);
+            // Extract text content correctly (handle text and buttons)
+            let text = '';
+            if (type === 'text') {
+                text = msg.text ? msg.text.body : '';
+            } else if (type === 'interactive' && msg.interactive.button_reply) {
+                text = msg.interactive.button_reply.title;
+            }
+
+            console.log(`Message from ${from}: "${text}" [${type}] ID: ${messageId}`);
 
             try {
-                // Deduplication: Check if we've already processed this message
                 const db = require('../database/db');
-                const checkDuplicate = await db.query(
-                    'SELECT message_id FROM conversation_logs WHERE message_id = $1 LIMIT 1',
-                    [messageId]
+
+                // 1. ATOMIC DEDUPLICATION
+                // Using the UNIQUE constraint we added to message_id
+                const logResult = await db.query(
+                    'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO NOTHING',
+                    [from, 'incoming', text, messageId]
                 );
 
-                if (checkDuplicate.rows.length > 0) {
+                if (logResult.rowCount === 0) {
                     console.log(`Duplicate message detected: ${messageId} - Skipping`);
                     return;
                 }
 
-                // Log incoming message to prevent duplicates
-                await db.query(
-                    'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4)',
-                    [from, 'incoming', text, messageId]
+                // 2. SESSION & CUSTOMER MANAGEMENT
+                // Check if customer exists and when they were last active
+                const customerResult = await db.query(
+                    'SELECT customer_id, last_active FROM customers WHERE phone = $1',
+                    [from]
                 );
 
-                // Handle "Hi" or "Hello" or "hi"
-                if (type === 'text' && (text.toLowerCase() === 'hi' || text.toLowerCase() === 'hello')) {
+                let isNewSession = false;
+                if (customerResult.rows.length === 0) {
+                    // New Customer
+                    await db.query('INSERT INTO customers (phone, name) VALUES ($1, $2)', [from, 'WhatsApp User']);
+                    isNewSession = true;
+                } else {
+                    const lastActive = customerResult.rows[0].last_active;
+                    // If no activity in 24 hours, treat as new session
+                    if (!lastActive || (Date.now() - new Date(lastActive).getTime()) > 24 * 60 * 60 * 1000) {
+                        isNewSession = true;
+                        console.log(`Session Reset for ${from} (Last active: ${lastActive})`);
+                    }
+                }
+
+                // Update last_active for the customer
+                await db.query('UPDATE customers SET last_active = NOW() WHERE phone = $1', [from]);
+
+                // 3. BOT RESPONSE LOGIC
+                const welcomeMessages = ['hi', 'hello', 'hey', 'start', 'menu'];
+                const isWelcomeIntent = type === 'text' && welcomeMessages.includes(text.toLowerCase());
+
+                if (isNewSession || isWelcomeIntent) {
                     const buttons = [
                         { id: 'btn_products', title: '🛍️ View Products' },
                         { id: 'btn_orders', title: '📦 My Orders' },
@@ -78,6 +108,13 @@ router.post('/whatsapp', async (req, res) => {
                     ];
                     await whatsappService.sendButtons(from, "Welcome to *Mera Kirana*! 🏪\nChoose an option to start:", buttons);
                     await whatsappService.markAsRead(messageId);
+                } else if (type === 'interactive') {
+                    // Handle button clicks specifically
+                    const buttonId = msg.interactive.button_reply.id;
+                    if (buttonId === 'btn_products') {
+                        // Placeholder for product flow
+                        await whatsappService.sendMessage(from, "Fetching our product categories... 📋\n(Feature coming in Phase 5)");
+                    }
                 }
             } catch (error) {
                 console.error('Error processing message:', error);
