@@ -145,13 +145,16 @@ router.post('/whatsapp', async (req, res) => {
                         if (buttonId === 'btn_products') {
                             try {
                                 // 1. Try to get ANY valid SKU from our DB to use as a thumbnail
-                                const result = await db.query('SELECT sku_code FROM product_variants LIMIT 1');
-                                const thumbnailSku = result.rows[0]?.sku_code || 'BR_PR_1KG';
+                                const result = await db.query('SELECT sku_code FROM product_variants WHERE is_active = true LIMIT 1');
+                                // Use a real ID from the screenshot as a hardcoded fallback if DB is empty
+                                const thumbnailSku = result.rows[0]?.sku_code || '5h0o9zetew';
 
                                 await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", thumbnailSku);
                             } catch (error) {
                                 console.error("Catalog Link Error:", error);
-                                await whatsappService.sendText(from, "The catalog is currently being updated! 🛠️\n\nIn the meantime, you can browse items by selecting '🛒 View Cart' or just send us what you need!");
+                                // FALLBACK: Send a direct wa.me link which always works
+                                const catalogLink = `https://wa.me/c/${process.env.WHATSAPP_PHONE_ID.split('-')[0]}`; // Basic assumption, or just tell them to check profile
+                                await whatsappService.sendText(from, "The native catalog is initializing. ⏳\n\nYou can browse our products directly on our business profile here: https://wa.me/c/" + process.env.WHATSAPP_PHONE_ID.replace(/\D/g, ''));
                             }
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
