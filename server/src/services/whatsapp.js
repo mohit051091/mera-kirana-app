@@ -106,7 +106,9 @@ const sendAddressMessage = (to, body, values = {}) => {
 };
 
 const sendCatalog = (to, body, thumbnailProductRetailerId) => {
-    const data = {
+    // Meta REQUIRES a valid thumbnail SKU for catalog_message to work.
+    // If you don't have one, this message type will fail.
+    return sendMessage({
         messaging_product: 'whatsapp',
         to: to,
         type: 'interactive',
@@ -114,18 +116,13 @@ const sendCatalog = (to, body, thumbnailProductRetailerId) => {
             type: 'catalog_message',
             body: { text: body },
             action: {
-                name: 'catalog_message'
+                name: 'catalog_message',
+                parameters: {
+                    thumbnail_product_retailer_id: thumbnailProductRetailerId
+                }
             }
         }
-    };
-
-    if (thumbnailProductRetailerId) {
-        data.interactive.action.parameters = {
-            thumbnail_product_retailer_id: thumbnailProductRetailerId
-        };
-    }
-
-    return sendMessage(data);
+    });
 };
 
 const markAsRead = (messageId) => {

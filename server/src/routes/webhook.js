@@ -143,10 +143,16 @@ router.post('/whatsapp', async (req, res) => {
                         const buttonId = msg.interactive.button_reply.id;
 
                         if (buttonId === 'btn_products') {
-                            // Full Catalog Mode: No SKUs needed in code.
-                            // We omit the thumbnail SKU for now to avoid "Product not found" errors
-                            // until the user has uploaded their first item.
-                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪");
+                            try {
+                                // 1. Try to get ANY valid SKU from our DB to use as a thumbnail
+                                const result = await db.query('SELECT sku_code FROM product_variants LIMIT 1');
+                                const thumbnailSku = result.rows[0]?.sku_code || 'BR_PR_1KG';
+
+                                await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", thumbnailSku);
+                            } catch (error) {
+                                console.error("Catalog Link Error:", error);
+                                await whatsappService.sendText(from, "The catalog is currently being updated! 🛠️\n\nIn the meantime, you can browse items by selecting '🛒 View Cart' or just send us what you need!");
+                            }
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
                             // 1. Fetch Cart Items with Joins
