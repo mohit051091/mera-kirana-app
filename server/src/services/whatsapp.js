@@ -106,7 +106,7 @@ const sendAddressMessage = (to, body, values = {}) => {
 };
 
 const sendCatalog = (to, body, thumbnailProductRetailerId) => {
-    return sendMessage({
+    const data = {
         messaging_product: 'whatsapp',
         to: to,
         type: 'interactive',
@@ -114,13 +114,18 @@ const sendCatalog = (to, body, thumbnailProductRetailerId) => {
             type: 'catalog_message',
             body: { text: body },
             action: {
-                name: 'catalog_message',
-                parameters: {
-                    thumbnail_product_retailer_id: thumbnailProductRetailerId
-                }
+                name: 'catalog_message'
             }
         }
-    });
+    };
+
+    if (thumbnailProductRetailerId) {
+        data.interactive.action.parameters = {
+            thumbnail_product_retailer_id: thumbnailProductRetailerId
+        };
+    }
+
+    return sendMessage(data);
 };
 
 const markAsRead = (messageId) => {

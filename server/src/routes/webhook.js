@@ -144,8 +144,9 @@ router.post('/whatsapp', async (req, res) => {
 
                         if (buttonId === 'btn_products') {
                             // Full Catalog Mode: No SKUs needed in code.
-                            // thumbnail_product_retailer_id is optional but shows a nice preview.
-                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", "BR_PR_1KG");
+                            // We omit the thumbnail SKU for now to avoid "Product not found" errors
+                            // until the user has uploaded their first item.
+                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪");
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
                             // 1. Fetch Cart Items with Joins
