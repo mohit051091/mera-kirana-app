@@ -47,12 +47,18 @@ router.post('/whatsapp', async (req, res) => {
             const type = msg.type;
             const messageId = msg.id;
 
-            // Extract text content correctly (handle text and buttons)
+            // Extract data correctly
             let text = '';
+            let interactive = null;
             if (type === 'text') {
                 text = msg.text ? msg.text.body : '';
-            } else if (type === 'interactive' && msg.interactive.button_reply) {
-                text = msg.interactive.button_reply.title;
+            } else if (type === 'interactive') {
+                interactive = msg.interactive;
+                if (interactive.button_reply) {
+                    text = interactive.button_reply.title;
+                } else if (interactive.list_reply) {
+                    text = interactive.list_reply.title;
+                }
             }
 
             console.log(`Message from ${from}: "${text}" [${type}] ID: ${messageId}`);
@@ -137,22 +143,17 @@ router.post('/whatsapp', async (req, res) => {
                         const buttonId = msg.interactive.button_reply.id;
 
                         if (buttonId === 'btn_products') {
-                            // Fetch real categories from the database
-                            const categoriesResult = await db.query(
-                                'SELECT category_id, name, description FROM product_categories WHERE is_active = true ORDER BY sort_order ASC'
+                            // 1. Fetch SKUs for the Native Catalog
+                            const variants = await db.query(
+                                'SELECT sku_code FROM product_variants WHERE is_active = true LIMIT 30'
                             );
 
-                            if (categoriesResult.rows.length === 0) {
+                            if (variants.rows.length === 0) {
                                 await whatsappService.sendText(from, "The shop is still being stocked! 🏪\nPlease check back in a few minutes.");
                             } else {
-                                const rows = categoriesResult.rows.map(cat => ({
-                                    id: `cat_${cat.category_id}`,
-                                    title: cat.name.substring(0, 24),
-                                    description: cat.description ? cat.description.substring(0, 72) : ''
-                                }));
-
-                                const sections = [{ title: 'Available Categories', rows: rows }];
-                                await whatsappService.sendList(from, "📦 Our Shop", "Please select a category:", "Browse Categories", sections);
+                                const skus = variants.rows.map(v => v.sku_code);
+                                const sections = [{ title: 'Our Favorites', product_retailer_ids: skus }];
+                                await whatsappService.sendProductList(from, "Browse our fresh products below:", "1565894964726780", sections);
                             }
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
@@ -209,8 +210,8 @@ router.post('/whatsapp', async (req, res) => {
                                 `, [from]);
 
                                 if (addressResult.rows.length === 0) {
-                                    // No address - Ask for one
-                                    await whatsappService.sendText(from, "🏠 *Delivery Address Required*\n\nPlease type your full delivery address below (including Landmark and Pincode):");
+                                    // No address - Send Native Address Message
+                                    await whatsappService.sendAddressMessage(from, "🏠 *Delivery Address Required*\n\nPlease fill in your address details using the form below:");
                                 } else {
                                     // Address exists - Ask to confirm
                                     const savedAddress = addressResult.rows[0].address_text;
@@ -231,16 +232,59 @@ router.post('/whatsapp', async (req, res) => {
                             await whatsappService.sendButtons(from, "💳 *Select Payment Method:*\n\nChoose how you want to pay for your order:", buttons);
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_change_addr') {
-                            // Delete old default address (optional, or just ask to type new one)
-                            await db.query(`
-                                DELETE FROM addresses 
-                                WHERE customer_id = (SELECT customer_id FROM customers WHERE phone = $1)
-                            `, [from]);
-                            await whatsappService.sendText(from, "🏠 *Enter New Address*\n\nPlease type your full delivery address below:");
+                            // Send Native Address Message for updates
+                            await whatsappService.sendAddressMessage(from, "🏠 *Enter New Address*\n\nPlease update your delivery details below:");
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'pay_upi' || buttonId === 'pay_cod') {
                             const method = buttonId === 'pay_upi' ? 'UPI' : 'COD';
-                            // Proceed to Final Order Creation (Placeholder)
+
+                            // 1. Fetch Cart, Total & Address for Summary
+                            const cartItems = await db.query(`
+                                SELECT ci.variant_id, ci.quantity, v.price, p.base_name, v.weight_label
+                                FROM carts c
+                                JOIN customers cust ON c.customer_id = cust.customer_id
+                                JOIN cart_items ci ON c.cart_id = ci.cart_id
+                                JOIN product_variants v ON ci.variant_id = v.variant_id
+                                JOIN products p ON v.product_id = p.product_id
+                                WHERE cust.phone = $1 AND c.status = 'ACTIVE'
+                            `, [from]);
+
+                            const addressResult = await db.query(`
+                                SELECT address_text FROM addresses a
+                                JOIN customers cust ON a.customer_id = cust.customer_id
+                                WHERE cust.phone = $1 AND a.is_default = true LIMIT 1
+                            `, [from]);
+
+                            if (cartItems.rows.length === 0) {
+                                await whatsappService.sendText(from, "Your cart is empty! 🛒");
+                            } else {
+                                let total = 0;
+                                let itemsText = "";
+                                cartItems.rows.forEach(item => {
+                                    const subtotal = item.price * item.quantity;
+                                    total += subtotal;
+                                    itemsText += `• ${item.base_name} (${item.weight_label}) x ${item.quantity}: *₹${subtotal}*\n`;
+                                });
+
+                                const address = addressResult.rows[0]?.address_text || "N/A";
+
+                                const summaryBody = `📦 *Order Review:*\n\n` +
+                                    `*Items:*\n${itemsText}\n` +
+                                    `*Total Amount:* ₹${total.toFixed(2)}\n` +
+                                    `*Payment:* ${method}\n` +
+                                    `*Delivery to:* ${address}\n\n` +
+                                    `Ready to place your order?`;
+
+                                const buttons = [
+                                    { id: `place_${method.toLowerCase()}`, title: '✅ Place Order' },
+                                    { id: 'btn_view_cart', title: '🛒 Edit Cart' }
+                                ];
+
+                                await whatsappService.sendButtons(from, summaryBody, buttons);
+                            }
+                            await whatsappService.markAsRead(messageId);
+                        } else if (buttonId.startsWith('place_')) {
+                            const method = buttonId.includes('upi') ? 'UPI' : 'COD';
                             await whatsappService.sendText(from, `⏳ *Processing your ${method} order...*\n\nPlease wait a moment.`);
 
                             // 1. Fetch Cart & Total
@@ -280,10 +324,10 @@ router.post('/whatsapp', async (req, res) => {
                                 await db.query("UPDATE carts SET status = 'CONVERTED' WHERE customer_id = (SELECT customer_id FROM customers WHERE phone = $1) AND status = 'ACTIVE'", [from]);
 
                                 if (method === 'COD') {
-                                    await whatsappService.sendText(from, `🎉 *Order Confirmed!*\n\nOrder ID: #${shortId}\nTotal: ₹${total.toFixed(2)}\n\nWe will deliver your items soon. Thank you! 🙏`);
+                                    await whatsappService.sendText(from, `🎉 *Order Confirmed!*\n\nOrder ID: #${shortId}\nTotal: ₹${total.toFixed(2)}\n\nWe will deliver your items soon to your saved address. Thank you! 🙏`);
                                 } else {
                                     // UPI flow (Placeholder for dynamic QR)
-                                    await whatsappService.sendText(from, `🔗 *Complete Payment*\n\nOrder ID: #${shortId}\nTotal: ₹${total.toFixed(2)}\n\nPlease pay using this UPI ID: *shop@upi* or wait for our payment link.`);
+                                    await whatsappService.sendText(from, `🔗 *Complete Payment*\n\nOrder ID: #${shortId}\nTotal: ₹${total.toFixed(2)}\n\nPlease pay using this UPI ID: *shop@upi*\n\nOnce paid, please send a screenshot of the receipt here. We will confirm your order immediately! ✅`);
                                 }
                             }
                             await whatsappService.markAsRead(messageId);
@@ -393,6 +437,39 @@ router.post('/whatsapp', async (req, res) => {
                             );
                             await whatsappService.markAsRead(messageId);
                         }
+                    } else if (interactive.type === 'address_message') {
+                        // HANDLE INCOMING ADDRESS FORM SUBMISSION
+                        const addrData = interactive.address_message;
+                        // Format: { name, phone_number, in_pin_code, house_number, floor_number, building_name, address, landmark_area, city, state }
+
+                        const fullAddress = [
+                            addrData.house_number,
+                            addrData.floor_number ? `Floor ${addrData.floor_number}` : null,
+                            addrData.tower_number ? `Tower ${addrData.tower_number}` : null,
+                            addrData.building_name,
+                            addrData.address,
+                            `Near ${addrData.landmark_area}`,
+                            addrData.city,
+                            addrData.state,
+                            addrData.in_pin_code
+                        ].filter(Boolean).join(', ');
+
+                        // Save to DB
+                        const custResult = await db.query('SELECT customer_id FROM customers WHERE phone = $1', [from]);
+                        const customerId = custResult.rows[0].customer_id;
+
+                        // Set all others to false, then insert new default
+                        await db.query('UPDATE addresses SET is_default = false WHERE customer_id = $1', [customerId]);
+                        await db.query(
+                            'INSERT INTO addresses (customer_id, address_text, pincode, is_default) VALUES ($1, $2, $3, true)',
+                            [customerId, fullAddress, addrData.in_pin_code]
+                        );
+
+                        const buttons = [
+                            { id: 'btn_confirm_addr', title: '💳 Choose Payment' }
+                        ];
+                        await whatsappService.sendButtons(from, `✅ *Address Saved!*\n\n${fullAddress}\n\nNow, let's settle the payment.`, buttons);
+                        await whatsappService.markAsRead(messageId);
                     }
                 }
             } catch (error) {

@@ -83,6 +83,28 @@ const sendProductList = (to, body, catalogId, sections) => {
     });
 };
 
+const sendAddressMessage = (to, body, values = {}) => {
+    return sendMessage({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: to,
+        type: 'interactive',
+        interactive: {
+            type: 'address_message',
+            body: {
+                text: body
+            },
+            action: {
+                name: 'address_message',
+                parameters: {
+                    country: 'IN',
+                    values: values
+                }
+            }
+        }
+    });
+};
+
 const markAsRead = (messageId) => {
     return sendMessage({
         messaging_product: 'whatsapp',
@@ -96,5 +118,6 @@ module.exports = {
     sendButtons,
     sendList,
     sendProductList,
+    sendAddressMessage,
     markAsRead
 };
