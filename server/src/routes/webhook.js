@@ -143,21 +143,9 @@ router.post('/whatsapp', async (req, res) => {
                         const buttonId = msg.interactive.button_reply.id;
 
                         if (buttonId === 'btn_products') {
-                            // 1. Fetch SKUs for the Native Catalog
-                            const variants = await db.query(
-                                'SELECT sku_code FROM product_variants WHERE is_active = true LIMIT 30'
-                            );
-
-                            if (variants.rows.length === 0) {
-                                await whatsappService.sendText(from, "The shop is still being stocked! 🏪\nPlease check back in a few minutes.");
-                            } else {
-                                const productItems = variants.rows.map(v => ({
-                                    product_retailer_id: v.sku_code
-                                }));
-                                const sections = [{ title: 'Our Favorites', product_items: productItems }];
-                                const catalogId = process.env.META_CATALOG_ID || "1565894964726780";
-                                await whatsappService.sendProductList(from, "Browse our fresh products below:", catalogId, sections);
-                            }
+                            // Full Catalog Mode: No SKUs needed in code.
+                            // thumbnail_product_retailer_id is optional but shows a nice preview.
+                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", "BR_PR_1KG");
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
                             // 1. Fetch Cart Items with Joins
