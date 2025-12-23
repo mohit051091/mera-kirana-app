@@ -155,7 +155,8 @@ router.post('/whatsapp', async (req, res) => {
                                     product_retailer_id: v.sku_code
                                 }));
                                 const sections = [{ title: 'Our Favorites', product_items: productItems }];
-                                await whatsappService.sendProductList(from, "Browse our fresh products below:", "1565894964726780", sections);
+                                const catalogId = process.env.META_CATALOG_ID || "1565894964726780";
+                                await whatsappService.sendProductList(from, "Browse our fresh products below:", catalogId, sections);
                             }
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
