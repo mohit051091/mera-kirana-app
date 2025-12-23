@@ -151,8 +151,10 @@ router.post('/whatsapp', async (req, res) => {
                             if (variants.rows.length === 0) {
                                 await whatsappService.sendText(from, "The shop is still being stocked! 🏪\nPlease check back in a few minutes.");
                             } else {
-                                const skus = variants.rows.map(v => v.sku_code);
-                                const sections = [{ title: 'Our Favorites', product_retailer_ids: skus }];
+                                const productItems = variants.rows.map(v => ({
+                                    product_retailer_id: v.sku_code
+                                }));
+                                const sections = [{ title: 'Our Favorites', product_items: productItems }];
                                 await whatsappService.sendProductList(from, "Browse our fresh products below:", "1565894964726780", sections);
                             }
                             await whatsappService.markAsRead(messageId);
