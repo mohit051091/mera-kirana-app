@@ -143,19 +143,13 @@ router.post('/whatsapp', async (req, res) => {
                         const buttonId = msg.interactive.button_reply.id;
 
                         if (buttonId === 'btn_products') {
-                            try {
-                                // 1. Try to get ANY valid SKU from our DB to use as a thumbnail
-                                const result = await db.query('SELECT sku_code FROM product_variants WHERE is_active = true LIMIT 1');
-                                // Use a real ID from the screenshot as a hardcoded fallback if DB is empty
-                                const thumbnailSku = result.rows[0]?.sku_code || '5h0o9zetew';
+                            // NOTE: We are using a direct shop link (wa.me/c/...) 
+                            // because the native Catalog API is very sensitive to channel sync.
+                            // This ensures your customers can always see your products!
+                            const phoneNumber = process.env.WHATSAPP_PHONE_ID.replace(/\D/g, '');
+                            const message = "Browse our full fresh catalog directly in our shop! 🏪\n\nClick here: https://wa.me/c/" + phoneNumber;
 
-                                await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", thumbnailSku);
-                            } catch (error) {
-                                console.error("Catalog Link Error:", error);
-                                // FALLBACK: Send a direct wa.me link which always works
-                                const catalogLink = `https://wa.me/c/${process.env.WHATSAPP_PHONE_ID.split('-')[0]}`; // Basic assumption, or just tell them to check profile
-                                await whatsappService.sendText(from, "The native catalog is initializing. ⏳\n\nYou can browse our products directly on our business profile here: https://wa.me/c/" + process.env.WHATSAPP_PHONE_ID.replace(/\D/g, ''));
-                            }
+                            await whatsappService.sendText(from, message);
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
                             // 1. Fetch Cart Items with Joins
