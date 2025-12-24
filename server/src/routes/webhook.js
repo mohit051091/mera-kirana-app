@@ -143,13 +143,15 @@ router.post('/whatsapp', async (req, res) => {
                         const buttonId = msg.interactive.button_reply.id;
 
                         if (buttonId === 'btn_products') {
-                            // NOTE: We are using a direct shop link (wa.me/c/...) 
-                            // because the native Catalog API is very sensitive to channel sync.
-                            // This ensures your customers can always see your products!
-                            const phoneNumber = process.env.WHATSAPP_PHONE_ID.replace(/\D/g, '');
-                            const message = "Browse our full fresh catalog directly in our shop! 🏪\n\nClick here: https://wa.me/c/" + phoneNumber;
-
-                            await whatsappService.sendText(from, message);
+                            try {
+                                // 1. Try Native Catalog Message (The JioMart style)
+                                // We use '5h0o9zetew' (Mawa) as the required thumbnail ID
+                                await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", "5h0o9zetew");
+                            } catch (error) {
+                                // 2. Fallback to Direct Link if Meta API rejects (Under review / Sync issues)
+                                const phoneNumber = process.env.WHATSAPP_PHONE_ID.replace(/\D/g, '');
+                                await whatsappService.sendText(from, "Browse our full fresh catalog directly in our shop! 🏪\n\nClick here: https://wa.me/c/" + phoneNumber);
+                            }
                             await whatsappService.markAsRead(messageId);
                         } else if (buttonId === 'btn_view_cart') {
                             // 1. Fetch Cart Items with Joins

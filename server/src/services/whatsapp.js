@@ -107,7 +107,6 @@ const sendAddressMessage = (to, body, values = {}) => {
 
 const sendCatalog = (to, body, thumbnailProductRetailerId) => {
     // Meta REQUIRES a valid thumbnail SKU for catalog_message to work.
-    // If you don't have one, this message type will fail.
     return sendMessage({
         messaging_product: 'whatsapp',
         to: to,
