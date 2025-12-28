@@ -63,7 +63,7 @@ router.post('/whatsapp', async (req, res) => {
         try {
             // 1. DEDUPLICATION (MUST BE SYNC TO PREVENT DUPLICATE RESPONSES)
             const logResult = await db.query(
-                'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO NOTHING RETURNING id',
+                'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO NOTHING',
                 [from, 'incoming', text, messageId]
             );
 
