@@ -61,13 +61,17 @@ router.post('/whatsapp', async (req, res) => {
         console.log(`Message from ${from}: "${text}" [${type}] ID: ${messageId}`);
 
         try {
-            // 1. ASYNC LOGGING (FIRE AND FORGET)
-            db.query(
-                'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO NOTHING',
+            // 1. DEDUPLICATION (MUST BE SYNC TO PREVENT DUPLICATE RESPONSES)
+            const logResult = await db.query(
+                'INSERT INTO conversation_logs (customer_phone, message_type, content, message_id) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO NOTHING RETURNING id',
                 [from, 'incoming', text, messageId]
-            ).then(result => {
-                if (result.rowCount === 0) console.log(`Duplicate msg detected: ${messageId}`);
-            }).catch(err => console.error("Async Logging Error:", err));
+            );
+
+            // If rowCount is 0, this is a duplicate message - stop processing immediately
+            if (logResult.rowCount === 0) {
+                console.log(`Duplicate msg detected, skipping: ${messageId}`);
+                return; // Exit early - do not send duplicate response
+            }
 
             // 2. SESSION CHECK (CACHE FIRST)
             let isNewSession = true;
