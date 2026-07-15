@@ -128,7 +128,8 @@ router.post('/whatsapp', async (req, res) => {
                     const buttonId = interactive.button_reply.id;
                     if (buttonId === 'btn_products') {
                         try {
-                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", "5h0o9zetew");
+                            const catalogId = process.env.WHATSAPP_CATALOG_ID || "5h0o9zetew";
+                            await whatsappService.sendCatalog(from, "Browse our full fresh catalog! 🏪", catalogId);
                         } catch (e) {
                             const phoneNumber = process.env.WHATSAPP_PHONE_ID.replace(/\D/g, '');
                             await whatsappService.sendText(from, "Browse catalog: https://wa.me/c/" + phoneNumber);

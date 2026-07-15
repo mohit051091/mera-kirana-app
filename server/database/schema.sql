@@ -131,11 +131,21 @@ CREATE TABLE order_status_logs (
 
 CREATE TABLE conversation_logs (
     log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    customer_id UUID REFERENCES customers(customer_id),
-    message_type VARCHAR(20), -- 'INCOMING', 'OUTGOING'
+    customer_phone VARCHAR(20) NOT NULL,
+    message_type VARCHAR(20), -- 'incoming', 'outgoing'
     content TEXT,
+    message_id VARCHAR(100) UNIQUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE TABLE partner_availability_logs (
+    log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    partner_id UUID REFERENCES delivery_partners(partner_id),
+    status_change VARCHAR(50) NOT NULL, -- AVAILABLE, BUSY, OFFLINE
+    changed_by VARCHAR(100) DEFAULT 'System',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 
 -- Indexes for Performance
 CREATE INDEX idx_orders_customer ON orders(customer_id);
