@@ -29,3 +29,9 @@
 - **Trigger:** User requested a detailed, step-by-step clicks-and-inputs setup guide for moving to production on Railway and Meta.
 - **Action:**
   1. Created `docs/DEPLOYMENT_GUIDE.md` containing absolute, step-by-step clicks, navigation targets, and input mappings for Meta Developer portal, WhatsApp Commerce Catalog, Railway database provision, environment setup, and Webhook verification routing.
+
+## [2026-07-16] Resolved Database ENETUNREACH Connection Issue
+- **Trigger:** Logs showed `ENETUNREACH` connection error when the Express server on Railway tried to connect to the Supabase database via IPv6.
+- **Action:**
+  1. Modified `server/src/server.js` to force Node.js to resolve hostname queries using IPv4 first (`dns.setDefaultResultOrder('ipv4first')`).
+  2. Staged, committed, and pushed the fix to the GitHub repository to trigger auto-redeploy on Railway.
