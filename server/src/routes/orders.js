@@ -117,7 +117,7 @@ router.put('/:id/status', async (req, res) => {
     const { status, changed_by } = req.body;
 
     // Get old status
-    const oldOrderRes = await client.query('SELECT status FROM orders WHERE order_id = $1', [id]);
+    const oldOrderRes = await client.query('SELECT status, customer_id, readable_order_id FROM orders WHERE order_id = $1', [id]);
     if (oldOrderRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Order not found' });
@@ -134,6 +134,27 @@ router.put('/:id/status', async (req, res) => {
       [id, oldStatus, status, changed_by || 'Admin']
     );
 
+    // If status updated to OUT_FOR_DELIVERY, generate and notify Delivery OTP
+    if (status === 'OUT_FOR_DELIVERY') {
+        const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+        
+        // Fetch customer phone
+        const custRes = await client.query('SELECT phone FROM customers WHERE customer_id = $1', [oldOrderRes.rows[0].customer_id]);
+        if (custRes.rows.length > 0) {
+            const phone = custRes.rows[0].phone;
+            
+            // Insert OTP to DB
+            await client.query(
+                `INSERT INTO otps (phone, otp_code, context, order_id, expires_at) 
+                 VALUES ($1, $2, 'DELIVERY_VERIFICATION', $3, NOW() + INTERVAL '24 hours')`,
+                [phone, otpCode, id]
+            );
+            
+            const whatsappService = require('../services/whatsapp');
+            await whatsappService.sendText(phone, `🚚 *Your order #${oldOrderRes.rows[0].readable_order_id} is Out for Delivery!* Please share this Delivery Verification OTP with the rider when they arrive: *${otpCode}*`);
+        }
+    }
+
     await client.query('COMMIT');
     res.json({ message: 'Status updated', newStatus: status });
 
@@ -141,6 +162,63 @@ router.put('/:id/status', async (req, res) => {
     await client.query('ROLLBACK');
     console.error('Update Status Error:', err);
     res.status(500).json({ error: 'Failed to update status' });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /api/orders/:id/verify-delivery - Verify OTP and complete delivery
+router.post('/:id/verify-delivery', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { id } = req.params;
+    const { otp_code } = req.body;
+
+    // Find active OTP
+    const otpRes = await client.query(
+      `SELECT * FROM otps 
+       WHERE order_id = $1 AND otp_code = $2 AND context = 'DELIVERY_VERIFICATION' 
+         AND expires_at > NOW() AND is_used = false 
+       LIMIT 1`,
+      [id, otp_code]
+    );
+
+    if (otpRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Invalid or expired OTP code' });
+    }
+
+    // Update OTP status
+    await client.query('UPDATE otps SET is_used = true WHERE otp_id = $1', [otpRes.rows[0].otp_id]);
+
+    // Update Order status
+    await client.query("UPDATE orders SET status = 'DELIVERED', updated_at = NOW() WHERE order_id = $1", [id]);
+
+    // Log Change
+    await client.query(
+      `INSERT INTO order_status_logs (order_id, old_status, new_status, changed_by)
+       VALUES ($1, 'OUT_FOR_DELIVERY', 'DELIVERED', 'Rider')`,
+      [id]
+    );
+
+    // Fetch customer details
+    const orderRes = await client.query('SELECT customer_id, readable_order_id FROM orders WHERE order_id = $1', [id]);
+    const custRes = await client.query('SELECT phone FROM customers WHERE customer_id = $1', [orderRes.rows[0].customer_id]);
+    
+    if (custRes.rows.length > 0) {
+      const phone = custRes.rows[0].phone;
+      const whatsappService = require('../services/whatsapp');
+      await whatsappService.sendText(phone, `🎉 *Order #${orderRes.rows[0].readable_order_id} Delivered!* Thank you for shopping with *Mera Kirana*! We hope to serve you again soon.`);
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Delivery verified and order completed successfully' });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Verify Delivery OTP Error:', err);
+    res.status(500).json({ error: 'Failed to verify delivery OTP' });
   } finally {
     client.release();
   }

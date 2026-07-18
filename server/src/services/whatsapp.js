@@ -79,23 +79,39 @@ const logOutgoingMessage = async (to, data, messageId) => {
 
 const sendMessage = async (data) => {
     if (process.env.NODE_ENV === 'test') {
-        console.log(`[MOCK WHATSAPP OUT] to ${data.to}:`, JSON.stringify(data));
-        const mockMsgId = 'mock_msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-        // Log asynchronously
-        logOutgoingMessage(data.to, data, mockMsgId);
-        return { message_id: mockMsgId };
+        if (data.status !== 'read') {
+            console.log(`[MOCK WHATSAPP OUT] to ${data.to}:`, JSON.stringify(data));
+            const mockMsgId = 'mock_msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+            logOutgoingMessage(data.to, data, mockMsgId);
+            return { message_id: mockMsgId };
+        }
+        return { message_id: 'mock_read_' + Date.now() };
     }
-    try {
-        const response = await axios.post(WHATSAPP_API_URL, data, {
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${TOKEN}`
+
+    const postWithRetry = async (retries = 3, delay = 1000) => {
+        try {
+            return await axios.post(WHATSAPP_API_URL, data, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TOKEN}`
+                }
+            });
+        } catch (error) {
+            const status = error.response?.status;
+            if (retries > 0 && (status === 429 || (status >= 500 && status < 600))) {
+                console.warn(`⚠️ WhatsApp API rate limit or error (${status}). Retrying in ${delay}ms... (${retries} attempts left)`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                return postWithRetry(retries - 1, delay * 2);
             }
-        });
-        
+            throw error;
+        }
+    };
+
+    try {
+        const response = await postWithRetry();
         const resData = response.data;
         const actualMsgId = resData?.messages?.[0]?.id;
-        if (actualMsgId) {
+        if (actualMsgId && data.status !== 'read') {
             logOutgoingMessage(data.to, data, actualMsgId);
         }
         return resData;

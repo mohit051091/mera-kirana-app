@@ -13,8 +13,9 @@ export default function LoginPage() {
         
         // Define admin panel access password matching WhatsApp store configurations
         if (password === 'merakirana2026' || password === 'merakirana123') {
-            // Set cookie for 7 days
+            // Set cookies for 7 days
             document.cookie = "admin_auth=true; path=/; max-age=604800; SameSite=Strict";
+            document.cookie = `admin_access_key=${password}; path=/; max-age=604800; SameSite=Strict`;
             router.push('/');
             router.refresh();
         } else {

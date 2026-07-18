@@ -67,3 +67,19 @@
   5. Added `processing_type` tracking (voice vs manual) to E2E conversation logs tables.
   6. Verified the full checkout sequence using a 9-step UAT test suite (greetings, cart limits, serviceable address check, delivery slot buttons, payment links, and capture callbacks) with 100% test success.
   7. Re-compiled Next.js dashboard bundle successfully.
+
+## [2026-07-19] Completed Reliability, Security, & Testing Hardening (Post-Audit Improvements)
+- **Trigger:** System audit report revealed bugs (voice MOV bypasses, connection leaks, lack of payments idempotency, fuzzy matching gaps) and security flaws (client-side auth).
+- **Action:**
+  1. Implemented server-side `x-admin-password` authorization middleware protecting all private admin API routes.
+  2. Integrated headers injection in client Axios helper and updated LoginPage cookies.
+  3. Implemented payments webhook idempotency guards (via transaction checks), order total validations, and audit logs.
+  4. Added Delivery Verification OTP sequence (4-digit codes on out-for-delivery triggers) and verify-delivery complete routes.
+  5. Added concurrent user locks in the bot state machine using a Set memory model.
+  6. Enforced Minimum Order Value (MOV) checks in Gemini voice ordering checkout paths.
+  7. Added wildcards ILIKE matches for fuzzy conversational catalog selections.
+  8. Configured automatic retry-backoff handlers in WhatsApp client for rate limit (429) or transient errors (5xx).
+  9. Added explicit fallback blocker for unsupported media formats (location pins, stickers, documents).
+  10. Added missing button handlers for `btn_orders` and `btn_support` in WhatsApp flows.
+  11. Executed and verified the E2E UAT test suite (all 9 test scenarios passing cleanly).
+  12. Synchronized database graphs using `graphify`.

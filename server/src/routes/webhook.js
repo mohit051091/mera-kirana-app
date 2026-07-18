@@ -7,6 +7,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 // RAM Cache for active users to skip DB lookups for 24 hours.
 const sessionCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+const activeUserLocks = new Set();
 
 // Helper: load config settings from DB with fallbacks
 async function getSetting(key, defaultValue) {
@@ -115,6 +116,12 @@ router.post('/whatsapp', async (req, res) => {
     if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
         const msg = body.entry[0].changes[0].value.messages[0];
         const from = msg.from;
+        if (activeUserLocks.has(from)) {
+            console.log(`[CONCURRENCY LOCK] Request for ${from} is already in progress. Skipping to prevent race conditions.`);
+            return;
+        }
+        activeUserLocks.add(from);
+
         const type = msg.type;
         const messageId = msg.id;
 
@@ -133,6 +140,12 @@ router.post('/whatsapp', async (req, res) => {
             }
         } else if (type === 'audio') {
             audioId = msg.audio ? msg.audio.id : null;
+        } else {
+            // Unsupported message formats (location, image, sticker, document, contact)
+            console.log(`Unsupported message type "${type}" from ${from}, sending explanation fallback.`);
+            await whatsappService.sendText(from, "⚠️ *Unsupported Message Format*\n\nWe currently only support text messages and voice notes to search products, manage carts, or select delivery slots. Please send a text message or a voice note! 🏪");
+            await whatsappService.markAsRead(messageId);
+            return;
         }
 
         console.log(`Message from ${from}: "${text || (audioId ? 'Voice Note' : 'Media')}" [${type}] ID: ${messageId}`);
@@ -1109,6 +1122,8 @@ Rules:
 
         } catch (error) {
             console.error('Error processing message:', error);
+        } finally {
+            activeUserLocks.delete(from);
         }
     } else if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.statuses) {
         console.log('Status update received - Ignoring');
