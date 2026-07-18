@@ -12,7 +12,79 @@ if (!WHATSAPP_PHONE_ID || !TOKEN) {
     console.error(`WHATSAPP_ACCESS_TOKEN: ${TOKEN ? 'SET' : 'MISSING'}`);
 }
 
+const logOutgoingMessage = async (to, data, messageId) => {
+    try {
+        if (!to || !messageId) return;
+        
+        // Lazy require db pool
+        const { pool } = require('../database/db');
+        
+        // 1. Determine active conversation_id and stage
+        const lastLogRes = await pool.query(`
+            SELECT conversation_id, session_stage,
+                   (EXTRACT(EPOCH FROM (NOW() - created_at)) * 1000) as age_ms
+            FROM conversation_logs 
+            WHERE customer_phone = $1 AND conversation_id IS NOT NULL 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        `, [to]);
+        
+        let conversationId;
+        let stage = 'GREETING';
+        
+        const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
+        if (lastLogRes.rows.length > 0 && parseFloat(lastLogRes.rows[0].age_ms) < TWO_HOURS_IN_MS) {
+            conversationId = lastLogRes.rows[0].conversation_id;
+            stage = lastLogRes.rows[0].session_stage || 'GREETING';
+        } else {
+            conversationId = require('crypto').randomUUID();
+        }
+
+        // 2. Extract outgoing text content
+        let content = '';
+        if (data.type === 'text' && data.text) {
+            content = data.text.body;
+        } else if (data.type === 'interactive' && data.interactive) {
+            const inter = data.interactive;
+            if (inter.type === 'button') {
+                content = `[Button Message]: ${inter.body?.text || ''} | Options: ` + (inter.action?.buttons || []).map(b => b.reply?.title).join(', ');
+            } else if (inter.type === 'list') {
+                content = `[List Message]: ${inter.body?.text || ''} | ${inter.action?.button || ''}`;
+            } else if (inter.type === 'product_list') {
+                content = `[Product List]: ${inter.body?.text || ''}`;
+            } else if (inter.type === 'catalog_message') {
+                content = `[Catalog Message]`;
+            } else {
+                content = `[Interactive: ${inter.type}]`;
+            }
+        } else if (data.type === 'image' && data.image) {
+            content = `[Image Link]: ${data.image.link} | Caption: ${data.image.caption || ''}`;
+        } else if (data.status === 'read') {
+            return;
+        } else {
+            content = `[Outgoing Message: ${data.type || 'unknown'}]`;
+        }
+
+        // 3. Save to database
+        await pool.query(
+            `INSERT INTO conversation_logs (customer_phone, message_type, content, message_id, conversation_id, session_stage, metadata)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (message_id) DO NOTHING`,
+            [to, 'outgoing', content, messageId, conversationId, stage, JSON.stringify(data)]
+        );
+    } catch (e) {
+        console.error('Failed to log outgoing message to DB:', e.message);
+    }
+};
+
 const sendMessage = async (data) => {
+    if (process.env.NODE_ENV === 'test') {
+        console.log(`[MOCK WHATSAPP OUT] to ${data.to}:`, JSON.stringify(data));
+        const mockMsgId = 'mock_msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        // Log asynchronously
+        logOutgoingMessage(data.to, data, mockMsgId);
+        return { message_id: mockMsgId };
+    }
     try {
         const response = await axios.post(WHATSAPP_API_URL, data, {
             headers: {
@@ -20,25 +92,28 @@ const sendMessage = async (data) => {
                 'Authorization': `Bearer ${TOKEN}`
             }
         });
-        return response.data;
+        
+        const resData = response.data;
+        const actualMsgId = resData?.messages?.[0]?.id;
+        if (actualMsgId) {
+            logOutgoingMessage(data.to, data, actualMsgId);
+        }
+        return resData;
     } catch (error) {
         // Enhanced error logging
         if (error.response) {
-            // The request was made and the server responded with a status code outside of 2xx
             console.error('WhatsApp API Error Response:');
             console.error('Status:', error.response.status);
             console.error('Data:', JSON.stringify(error.response.data, null, 2));
             console.error('Headers:', error.response.headers);
         } else if (error.request) {
-            // The request was made but no response was received
             console.error('No response received from WhatsApp API');
             console.error('Request:', error.request);
         } else {
-            // Something happened in setting up the request
             console.error('Error setting up WhatsApp request:', error.message);
         }
         console.error('Full error stack:', error.stack);
-        throw error; // Re-throw so calling code knows it failed
+        throw error;
     }
 };
 
@@ -157,6 +232,35 @@ const markAsRead = (messageId) => {
     });
 };
 
+const sendImage = (to, imageUrl, caption = '') => {
+    return sendMessage({
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'image',
+        image: {
+            link: imageUrl,
+            caption: caption
+        }
+    });
+};
+
+const downloadMedia = async (mediaId) => {
+    try {
+        const mediaInfo = await axios.get(`https://graph.facebook.com/v17.0/${mediaId}`, {
+            headers: { 'Authorization': `Bearer ${TOKEN}` }
+        });
+        const mediaUrl = mediaInfo.data.url;
+        const response = await axios.get(mediaUrl, {
+            headers: { 'Authorization': `Bearer ${TOKEN}` },
+            responseType: 'arraybuffer'
+        });
+        return { buffer: Buffer.from(response.data), mimeType: mediaInfo.data.mime_type };
+    } catch (error) {
+        console.error('Error downloading Meta media:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     sendText,
     sendButtons,
@@ -164,5 +268,7 @@ module.exports = {
     sendProductList,
     sendCatalog,
     sendAddressMessage,
-    markAsRead
+    markAsRead,
+    sendImage,
+    downloadMedia
 };

@@ -16,6 +16,12 @@
 
 ## Completed
 - [x] Initial codebase audits and dependency graphs generated.
-- [x] Wrote harness configuration and spec files.
 - [x] Developed missing frontend pages `/partners` and `/settings`.
 - [x] Verified frontend build successfully.
+- [x] Deduplicate and seed 19,586 Indian postal codes from `pincodes.csv`.
+- [x] Implement backend settings, coupons, and salespeople controllers.
+- [x] Integrate settings control panels (vacation mode, MOV, delivery thresholds, operating schedules, slot capacities, serviceable area tags).
+- [x] Create Coupons and Salesperson referral dashboards with commission ledgers.
+- [x] Enforce Owner-only Cost Price (CP) margins and mask them for Managers.
+- [x] Enforce Cookie-based authentication middleware redirecting to `/login`.
+- [x] Compiled Next.js dashboard bundle successfully.

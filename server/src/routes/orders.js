@@ -146,4 +146,37 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
+// GET /api/orders/qr/:id.png - Serves UPI payment QR image dynamically
+const QRCode = require('qrcode');
+router.get('/qr/:id.png', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Retrieve order details to extract VPA and amount
+    const orderRes = await pool.query('SELECT total_amount, readable_order_id FROM orders WHERE order_id = $1', [id]);
+    if (orderRes.rows.length === 0) {
+      return res.status(404).send('Order not found');
+    }
+    const order = orderRes.rows[0];
+    
+    // Query system VPA from settings or fallback to default
+    const settingsRes = await pool.query("SELECT value FROM system_settings WHERE key = 'payment_vpa' LIMIT 1");
+    const vpa = settingsRes.rows.length ? settingsRes.rows[0].value : 'merakirana@okaxis';
+    
+    const orderTotal = order.total_amount;
+    const note = encodeURIComponent(`Order #${order.readable_order_id}`);
+    const upiUri = `upi://pay?pa=${vpa}&am=${orderTotal}&tn=${note}&tr=${id}`;
+    
+    res.setHeader('Content-Type', 'image/png');
+    // Generate and stream directly to client
+    await QRCode.toFileStream(res, upiUri, {
+      type: 'png',
+      width: 300,
+      errorCorrectionLevel: 'M'
+    });
+  } catch (e) {
+    console.error('Error generating QR image:', e);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
 module.exports = router;

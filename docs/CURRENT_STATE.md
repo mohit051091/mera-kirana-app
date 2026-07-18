@@ -1,12 +1,17 @@
-# Current State Snapshot
+# Project Current State snapshot
 
-- **Last Updated:** 2026-07-15
-- **Status:** Development completed and validated.
+- **Date:** 2026-07-18
+- **Status:** All core phases (1, 2, and 3), including Razorpay Sandbox integrations, Campaigns broadcasts, and E2E checkout UAT sequences, successfully implemented, verified, and compiled.
 
-## Bottlenecks & Known Issues
-- None. The Next.js dashboard has been compiled and validated. The database schema matches code routes.
+## Accomplishments & Current Setup
+- **Production Server:** Node.js Express server running in test mode on port 3000, connected to Railway PostgreSQL.
+- **Razorpay Sandbox Integration:** Configured API keys and webhook capture listeners at `/api/webhook/payments`. Verifies HMAC signatures and automates PENDING_PAYMENT to CONFIRMED transitions.
+- **Campaigns Broadcast Dashboard:** Built `/campaigns` panel enabling text and image marketing broadcasts.
+- **Checkout State Machine:** Handles DND commands, calculates slot bookings, and triggers slot selections, serviceable address checks, and salesperson refer attributions.
+- **Database Schema Extensions:** Extended `conversation_logs` schema to support `processing_type` ('voice' vs 'manual') logging.
+- **Admin Dashboard Panels:** Auth edge middleware, settings, coupons CRUD, refer salespeople commissions, delivery partner availability, dispatch optimizer, analytics, and campaigns.
+- **100% Build Success:** Next.js bundle compiled cleanly.
 
-## Priorities & Next Steps
-1. The user will provision a new database on Railway and run `server/database/schema.sql` to initialize tables.
-2. The user will set up their Meta Commerce Catalog, get their Catalog ID, and update the `.env` variables accordingly.
-3. Configure the WhatsApp Webhook URL on the Meta Developer Dashboard to route to the server URL (e.g., `https://<railway-url>/api/webhook/whatsapp`).
+## Next Steps
+1. Add Webhook triggers to the Razorpay developer console.
+2. Push repository commits to Railway to auto-redeploy production.

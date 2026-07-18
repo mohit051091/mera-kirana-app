@@ -17,6 +17,7 @@ router.get('/', async (req, res) => {
               'variant_id', pv.variant_id,
               'weight', pv.weight_label,
               'price', pv.price,
+              'cost_price', pv.cost_price,
               'stock', pv.stock_quantity,
               'sku', pv.sku_code
             ) ORDER BY pv.price ASC
@@ -55,8 +56,8 @@ router.post('/', async (req, res) => {
         if (variants && variants.length > 0) {
             for (const v of variants) {
                 await client.query(
-                    'INSERT INTO product_variants (product_id, weight_label, price, stock_quantity, sku_code) VALUES ($1, $2, $3, $4, $5)',
-                    [productId, v.weight, v.price, v.stock || 0, v.sku]
+                    'INSERT INTO product_variants (product_id, weight_label, price, cost_price, stock_quantity, sku_code) VALUES ($1, $2, $3, $4, $5, $6)',
+                    [productId, v.weight, v.price, v.cost_price || null, v.stock || 0, v.sku]
                 );
             }
         }
@@ -91,8 +92,8 @@ router.post('/bulk', async (req, res) => {
             if (p.variants) {
                 for (const v of p.variants) {
                     await client.query(
-                        'INSERT INTO product_variants (product_id, weight_label, price, stock_quantity) VALUES ($1, $2, $3, $4)',
-                        [productId, v.weight, v.price, v.stock || 100]
+                        'INSERT INTO product_variants (product_id, weight_label, price, cost_price, stock_quantity) VALUES ($1, $2, $3, $4, $5)',
+                        [productId, v.weight, v.price, v.cost_price || null, v.stock || 100]
                     );
                 }
             }

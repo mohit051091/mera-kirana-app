@@ -9,3 +9,8 @@ npm-debug.log
 logs.*.log
 logs.*.json
 *.json
+pincodes.csv
+rzp-key.csv
+graphify-out/
+server/pincodes.csv
+server/rzp-key.csv
