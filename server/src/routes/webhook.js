@@ -335,12 +335,12 @@ Rules:
                 // Parse items
                 if (voiceParsed.items && voiceParsed.items.length > 0) {
                     for (const item of voiceParsed.items) {
-                        // Resolve variant in database
+                        // Resolve variant in database using fuzzy/wildcard match
                         const query = `
                             SELECT pv.variant_id 
                             FROM product_variants pv
                             JOIN products p ON pv.product_id = p.product_id
-                            WHERE p.base_name ILIKE $1 AND pv.is_active = true
+                            WHERE p.base_name ILIKE '%' || $1 || '%' AND pv.is_active = true
                             LIMIT 1
                         `;
                         const resVar = await db.query(query, [item.name]);
@@ -388,19 +388,21 @@ Rules:
 
                 // Check for One-Shot complete order conditions
                 const cartItemsCheck = await db.query('SELECT 1 FROM cart_items WHERE cart_id = $1', [cartId]);
-                if (cartItemsCheck.rows.length > 0 && metadata.address_id && metadata.slot) {
+                
+                const totalRes = await db.query(`
+                    SELECT SUM(v.price * ci.quantity) as subtotal
+                    FROM cart_items ci
+                    JOIN product_variants v ON ci.variant_id = v.variant_id
+                    WHERE ci.cart_id = $1
+                `, [cartId]);
+                const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                const mov = await getSetting('minimum_order_value', 150);
+
+                if (cartItemsCheck.rows.length > 0 && metadata.address_id && metadata.slot && subtotal >= mov) {
                     // Bypass stages and skip to payment select
                     metadata.stage = 'CHOOSE_PAYMENT';
                     await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
                     
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
-
                     // Dynamic bill details
                     const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                     const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
@@ -418,19 +420,21 @@ Rules:
                     await whatsappService.sendButtons(from, summaryText, buttons);
                     await whatsappService.markAsRead(messageId);
                     return;
+                } else if (cartItemsCheck.rows.length > 0 && subtotal < mov) {
+                    // Below MOV threshold, alert customer and offer manual checkout flow helper
+                    await whatsappService.sendText(from, `⚠️ Your voice order subtotal (₹${subtotal.toFixed(2)}) is below the Minimum Order Value of *₹${mov}*. Please add items worth *₹${(mov - subtotal).toFixed(2)}* more to checkout.`);
+                    const buttons = [
+                        { id: 'btn_products', title: '🛍️ Add More' },
+                        { id: 'btn_view_cart', title: '🛒 View Cart' }
+                    ];
+                    await whatsappService.sendButtons(from, "What would you like to do next?", buttons);
+                    await whatsappService.markAsRead(messageId);
+                    return;
                 } else {
                     // Send cart summary and request next details
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const sub = parseFloat(totalRes.rows[0].subtotal || 0);
-
                     let updateMsg = "";
                     if (voiceParsed.items && voiceParsed.items.length > 0) {
-                        updateMsg = `✅ *Items Added to Cart!* (Subtotal: ₹${sub.toFixed(2)})`;
+                        updateMsg = `✅ *Items Added to Cart!* (Subtotal: ₹${subtotal.toFixed(2)})`;
                     } else if (voiceParsed.address && voiceParsed.address.pincode) {
                         updateMsg = `📍 *Delivery Address Saved!* (Pincode: ${voiceParsed.address.pincode})`;
                     } else if (voiceParsed.delivery_slot && voiceParsed.delivery_slot.slot) {
@@ -479,11 +483,49 @@ Rules:
                 return;
             }
 
-            // Button Click triggers
             if (interactive && interactive.button_reply) {
                 const buttonId = interactive.button_reply.id;
 
-                if (buttonId === 'btn_products') {
+                if (buttonId === 'btn_orders') {
+                    const recentOrders = await db.query(`
+                        SELECT readable_order_id, status, total_amount, created_at 
+                        FROM orders 
+                        WHERE customer_id = $1 
+                        ORDER BY created_at DESC 
+                        LIMIT 3
+                    `, [customerId]);
+
+                    if (recentOrders.rows.length === 0) {
+                        const buttons = [
+                            { id: 'btn_products', title: '🛍️ Browse Products' }
+                        ];
+                        await whatsappService.sendButtons(from, "You haven't placed any orders yet! 🏪", buttons);
+                    } else {
+                        let msg = "📦 *Your Recent Orders:*\n\n";
+                        recentOrders.rows.forEach(order => {
+                            const dateStr = new Date(order.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                            msg += `• *Order #${order.readable_order_id}* - Status: _${order.status}_\n  Total: *₹${parseFloat(order.total_amount).toFixed(2)}* | Placed on ${dateStr}\n\n`;
+                        });
+                        const buttons = [
+                            { id: 'btn_products', title: '🛍️ Browse Products' },
+                            { id: 'btn_view_cart', title: '🛒 View Cart' }
+                        ];
+                        await whatsappService.sendButtons(from, msg, buttons);
+                    }
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                } else if (buttonId === 'btn_support') {
+                    const buttons = [
+                        { id: 'btn_products', title: '🛍️ Browse Products' }
+                    ];
+                    await whatsappService.sendButtons(
+                        from, 
+                        "📞 *Call Support:*\n\nYou can reach our store manager directly at *+91 98765 43210* for any order queries or delivery assistance. We are open from 6:00 AM to 9:00 PM!",
+                        buttons
+                    );
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                } else if (buttonId === 'btn_products') {
                     try {
                         const catalogId = process.env.WHATSAPP_CATALOG_ID || "5h0o9zetew";
                         await whatsappService.sendCatalog(from, "Browse our fresh catalog! 🏪", catalogId);
@@ -663,6 +705,17 @@ Rules:
                     
                     let finalTotal = subtotal + deliveryFee;
 
+                    // Apply coupon discount if set in session
+                    if (metadata.coupon_code) {
+                        const couponRes = await db.query('SELECT discount_type, discount_value FROM coupons WHERE code = $1 AND is_active = true', [metadata.coupon_code]);
+                        if (couponRes.rows.length > 0) {
+                            const cp = couponRes.rows[0];
+                            const discount = cp.discount_type === 'PERCENT' ? (subtotal * cp.discount_value) / 100 : parseFloat(cp.discount_value);
+                            finalTotal -= discount;
+                            itemsText += `• Coupon Discount (${metadata.coupon_code}): -₹${discount.toFixed(2)}\n`;
+                        }
+                    }
+
                     // Apply COD premium
                     if (method === 'COD') {
                         const premium = await getSetting('cod_premium', 10);
@@ -714,6 +767,18 @@ Rules:
                         let deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
                         
                         let finalTotal = subtotal + deliveryFee;
+
+                        if (metadata.coupon_code) {
+                            const couponRes = await client.query('SELECT discount_type, discount_value FROM coupons WHERE code = $1 AND is_active = true', [metadata.coupon_code]);
+                            if (couponRes.rows.length > 0) {
+                                const cp = couponRes.rows[0];
+                                const discount = cp.discount_type === 'PERCENT' ? (subtotal * cp.discount_value) / 100 : parseFloat(cp.discount_value);
+                                finalTotal -= discount;
+                                
+                                // Increment coupon usage
+                                await client.query('UPDATE coupons SET current_uses = current_uses + 1 WHERE code = $1', [metadata.coupon_code]);
+                            }
+                        }
 
                         if (method === 'COD') {
                             const premium = await getSetting('cod_premium', 10);
@@ -774,7 +839,6 @@ Rules:
                         }
 
                         await client.query('COMMIT');
-                        client.release();
 
                         // 6. Deliver confirmations
                         if (method === 'COD') {
@@ -831,9 +895,10 @@ Rules:
 
                     } catch (error) {
                         await client.query('ROLLBACK');
-                        client.release();
                         console.error('Order transaction failed:', error);
                         await whatsappService.sendText(from, "Something went wrong placing your order. Please try again.");
+                    } finally {
+                        client.release();
                     }
                 }
                 await whatsappService.markAsRead(messageId);
@@ -930,6 +995,60 @@ Rules:
                 await whatsappService.sendButtons(from, "✅ *Address Saved!* Tap button below to choose delivery slot:", buttons);
                 await whatsappService.markAsRead(messageId);
                 return;
+            }
+
+            // Coupon Code Application handler
+            if (type === 'text' && metadata.stage && metadata.stage !== 'START') {
+                const possibleCoupon = text.trim().toUpperCase();
+                const couponRes = await db.query(
+                    'SELECT * FROM coupons WHERE code = $1 AND is_active = true AND (end_date IS NULL OR end_date > NOW()) AND (max_uses IS NULL OR current_uses < max_uses)',
+                    [possibleCoupon]
+                );
+                
+                if (couponRes.rows.length > 0) {
+                    const coupon = couponRes.rows[0];
+                    
+                    const totalRes = await db.query(`
+                        SELECT SUM(v.price * ci.quantity) as subtotal
+                        FROM cart_items ci
+                        JOIN product_variants v ON ci.variant_id = v.variant_id
+                        WHERE ci.cart_id = $1
+                    `, [cartId]);
+                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+
+                    if (subtotal < parseFloat(coupon.min_order_value || 0)) {
+                        await whatsappService.sendText(from, `⚠️ Coupon *${possibleCoupon}* requires a minimum order value of *₹${coupon.min_order_value}*. Current subtotal is *₹${subtotal.toFixed(2)}*.`);
+                    } else {
+                        metadata.coupon_code = possibleCoupon;
+                        await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                        
+                        const discount = coupon.discount_type === 'PERCENT' ? (subtotal * coupon.discount_value) / 100 : parseFloat(coupon.discount_value);
+                        
+                        await whatsappService.sendText(from, `🎉 *Coupon "${possibleCoupon}" Applied!*\nYou saved *₹${discount.toFixed(2)}* on this order!`);
+                        
+                        // Re-trigger bill summary / payment selection
+                        metadata.stage = 'CHOOSE_PAYMENT';
+                        await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+
+                        const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
+                        const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
+
+                        const paymentText = `📋 *Updated Order Bill Summary:*\n\n` +
+                            `*Subtotal:* ₹${subtotal.toFixed(2)}\n` +
+                            `*Coupon Discount (${possibleCoupon}):* -₹${discount.toFixed(2)}\n` +
+                            `*Delivery Fee:* ₹${deliveryFee.toFixed(2)}\n` +
+                            `*Total:* ₹${(subtotal - discount + deliveryFee).toFixed(2)}\n\n` +
+                            `Select Payment Method:`;
+                        
+                        const buttons = [
+                            { id: 'pay_upi', title: '💳 Pay Online' },
+                            { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                        ];
+                        await whatsappService.sendButtons(from, paymentText, buttons);
+                    }
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
             }
 
             // Normal text fallback state capture (e.g. entering address via text instead of location pin)

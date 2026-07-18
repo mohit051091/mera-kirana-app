@@ -25,6 +25,7 @@ router.post('/', async (req, res) => {
             const entity = req.body.payload?.payment?.entity || req.body.payload?.order?.entity;
             const orderId = entity?.notes?.order_id || entity?.reference_id;
             const amount = entity?.amount ? (entity.amount / 100) : 0; // convert paise to INR
+            const upiTxnId = entity?.acquirer_data?.rrn || entity?.id;
 
             if (!orderId) {
                 console.warn('⚠️ Webhook received but no order_id found in notes/reference_id.');
@@ -33,7 +34,34 @@ router.post('/', async (req, res) => {
 
             console.log(`💳 Payment verification webhook triggered for Order: ${orderId}, Amount: ₹${amount}`);
 
-            // 2. Update order status to CONFIRMED
+            // 1. Idempotency Check: check if payment log already exists
+            const existingLog = await pool.query('SELECT 1 FROM payment_logs WHERE upi_transaction_id = $1 LIMIT 1', [upiTxnId]);
+            if (existingLog.rows.length > 0) {
+                console.log(`⚠️ Duplicate payment webhook detected for txn: ${upiTxnId}. Skipping duplicate processing.`);
+                return res.sendStatus(200);
+            }
+
+            // 2. Fetch order to verify total amount matches
+            const orderCheck = await pool.query('SELECT total_amount, status, customer_id, readable_order_id FROM orders WHERE order_id = $1', [orderId]);
+            if (orderCheck.rows.length === 0) {
+                console.error(`❌ Order ${orderId} not found in database.`);
+                return res.status(404).json({ error: 'Order not found' });
+            }
+
+            const dbOrder = orderCheck.rows[0];
+            const orderTotal = parseFloat(dbOrder.total_amount);
+
+            // Validate amount (allow minor rounding differences)
+            if (Math.abs(orderTotal - amount) > 0.05) {
+                console.error(`❌ Payment amount mismatch! Paid: ₹${amount}, Expected: ₹${orderTotal}`);
+                await pool.query(
+                    'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5)',
+                    [orderId, upiTxnId, amount, 'AMOUNT_MISMATCH', JSON.stringify(req.body)]
+                );
+                return res.status(400).json({ error: 'Amount mismatch' });
+            }
+
+            // 3. Update order status to CONFIRMED
             const updateRes = await pool.query(`
                 UPDATE orders 
                 SET status = 'CONFIRMED' 
@@ -41,14 +69,18 @@ router.post('/', async (req, res) => {
                 RETURNING order_id, readable_order_id, customer_id
             `, [orderId]);
 
+            // 4. Log the transaction details
+            await pool.query(
+                'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5)',
+                [orderId, upiTxnId, amount, 'SUCCESS', JSON.stringify(req.body)]
+            );
+
             if (updateRes.rows.length > 0) {
-                const order = updateRes.rows[0];
-                
                 // Get customer phone number
-                const custRes = await pool.query('SELECT phone FROM customers WHERE customer_id = $1', [order.customer_id]);
+                const custRes = await pool.query('SELECT phone FROM customers WHERE customer_id = $1', [dbOrder.customer_id]);
                 if (custRes.rows.length > 0) {
                     const phone = custRes.rows[0].phone;
-                    await whatsappService.sendText(phone, `🎉 *Online Payment Confirmed!* We have received your payment of *₹${amount.toFixed(2)}* for *Order #${order.readable_order_id}*. Your order is now confirmed and scheduled for delivery!`);
+                    await whatsappService.sendText(phone, `🎉 *Online Payment Confirmed!* We have received your payment of *₹${amount.toFixed(2)}* for *Order #${dbOrder.readable_order_id}*. Your order is now confirmed and scheduled for delivery!`);
                 }
             } else {
                 console.log(`⚠️ Order ${orderId} status was not updated (might already be confirmed).`);

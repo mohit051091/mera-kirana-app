@@ -62,6 +62,7 @@ async function runTests() {
             await pool.query("DELETE FROM carts WHERE customer_id = $1", [cid]);
             await pool.query("DELETE FROM sales_commissions WHERE order_id IN (SELECT order_id FROM orders WHERE customer_id = $1)", [cid]);
             await pool.query("DELETE FROM order_items WHERE order_id IN (SELECT order_id FROM orders WHERE customer_id = $1)", [cid]);
+            await pool.query("DELETE FROM payment_logs WHERE order_id IN (SELECT order_id FROM orders WHERE customer_id = $1)", [cid]);
             await pool.query("DELETE FROM orders WHERE customer_id = $1", [cid]);
             await pool.query("DELETE FROM addresses WHERE customer_id = $1", [cid]);
             await pool.query("DELETE FROM customers WHERE customer_id = $1", [cid]);
@@ -357,13 +358,16 @@ async function runTests() {
         // --- TEST 9: Trigger Razorpay Webhook Confirmation ---
         console.log('\n--- UAT Test 9: Simulate Razorpay Webhook Capture Callback ---');
         if (orderUuid) {
+            const orderDbRes = await pool.query("SELECT total_amount FROM orders WHERE order_id = $1", [orderUuid]);
+            const expectedTotal = parseFloat(orderDbRes.rows[0].total_amount);
+
             await axios.post('http://localhost:3000/api/webhook/payments', {
                 event: 'payment.captured',
                 payload: {
                     payment: {
                         entity: {
                             id: 'pay_test_verification_01',
-                            amount: 24000,
+                            amount: Math.round(expectedTotal * 100),
                             notes: {
                                 order_id: orderUuid
                             }
