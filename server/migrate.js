@@ -206,7 +206,7 @@ async function runMigration() {
             console.log('✅ Added Foreign Key Constraint: fk_referred_by_salesperson to customers');
         }
 
-        // 14. Create subscriptions table
+        // 14. Create subscriptions table & indexes
         await pool.query(`
             CREATE TABLE IF NOT EXISTS subscriptions (
                 subscription_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -218,8 +218,10 @@ async function runMigration() {
                 next_delivery_date DATE NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
             );
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_customer_id ON subscriptions(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_status_created_at ON subscriptions(status, created_at DESC);
         `);
-        console.log('✅ Checked/Created Table: subscriptions');
+        console.log('✅ Checked/Created Table: subscriptions & indexes');
 
         // 15. Verify/Alter conversation_logs schema columns
         await pool.query(`
