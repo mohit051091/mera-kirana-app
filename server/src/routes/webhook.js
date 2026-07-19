@@ -596,7 +596,7 @@ router.post('/whatsapp', async (req, res) => {
                     try {
                         console.log('Falling back to Gemini for direct speech transcription...');
                         const genAI = new GoogleGenerativeAI(geminiKey);
-                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                         const prompt = "Transcribe this audio recording verbatim. Translate any Hindi or Marathi terms into standard English text.";
                         const geminiRes = await model.generateContent([
                             {
@@ -625,7 +625,7 @@ router.post('/whatsapp', async (req, res) => {
                     try {
                         const genAI = new GoogleGenerativeAI(geminiKey);
                         const model = genAI.getGenerativeModel({
-                            model: "gemini-1.5-flash",
+                            model: "gemini-2.5-flash",
                             generationConfig: { responseMimeType: "application/json" }
                         });
                         
