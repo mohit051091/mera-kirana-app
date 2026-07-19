@@ -247,6 +247,18 @@ const sendImage = (to, imageUrl, caption = '') => {
     });
 };
 
+const sendAudio = (to, linkOrId) => {
+    const audioPayload = linkOrId.startsWith('http') 
+        ? { link: linkOrId } 
+        : { id: linkOrId };
+    return sendMessage({
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'audio',
+        audio: audioPayload
+    });
+};
+
 const downloadMedia = async (mediaId) => {
     try {
         const mediaInfo = await axios.get(`https://graph.facebook.com/v17.0/${mediaId}`, {
@@ -273,5 +285,6 @@ module.exports = {
     sendAddressMessage,
     markAsRead,
     sendImage,
+    sendAudio,
     downloadMedia
 };

@@ -144,8 +144,26 @@ router.post('/whatsapp', async (req, res) => {
                 audioId = msg.audio ? msg.audio.id : null;
             } else {
                 // Unsupported message formats (location, image, sticker, document, contact)
-                console.log(`Unsupported message type "${type}" from ${from}, sending explanation fallback.`);
-                await whatsappService.sendText(from, "⚠️ *Unsupported Message Format*\n\nWe currently only support text messages and voice notes to search products, manage carts, or select delivery slots. Please send a text message or a voice note! 🏪");
+                console.log(`Unsupported message type "${type}" from ${from}, sending voice note and button fallbacks.`);
+                
+                const fallbackAudioUrl = await getSetting('unsupported_format_audio_url', 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/unsupported_warning.ogg');
+                try {
+                    await whatsappService.sendAudio(from, fallbackAudioUrl);
+                } catch (audioErr) {
+                    logError(audioErr, 'send_fallback_audio_failed');
+                }
+
+                const buttons = [
+                    { id: 'btn_products', title: '🛍️ Browse Products' },
+                    { id: 'btn_orders', title: '📦 My Orders' },
+                    { id: 'btn_talk_to_owner', title: '🤝 Talk to Owner' }
+                ];
+                await whatsappService.sendButtons(
+                    from, 
+                    "Choose an option below to continue:",
+                    buttons
+                );
+                
                 await whatsappService.markAsRead(messageId);
                 return;
             }
@@ -311,7 +329,7 @@ router.post('/whatsapp', async (req, res) => {
             // 6. PROCESS VOICE ORDER (STT parser)
             let voiceParsed = null;
             if (type === 'audio' && audioId) {
-                const apiKey = process.env.GEMINI_API_KEY;
+                const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
                 if (!apiKey) {
                     await whatsappService.sendText(from, "Voice ordering is currently offline. Please use text checkout.");
                     await whatsappService.markAsRead(messageId);
