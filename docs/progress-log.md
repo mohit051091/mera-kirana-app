@@ -111,3 +111,5 @@
   1. Intercepted `"order"` message type from native catalog cart submissions. Parsed selected variants and quantities, populated PostgreSQL cart table, and redirected directly to checkout buttons.
   2. Split welcome greeting into two dispatches: (a) a spoken voice note dictating the order tips, and (b) a lightweight buttons message with clean navigation links.
   3. Added welcome tip audio settings keys to Settings page configuration.
+  4. Resolved Meta API 404 media upload errors by seeding the database settings table with a working default audio URL fallback.
+  5. Fixed catalog order parsing crashes by falling back to query the `sku_code` field on variant checks, and localized parsing error messages.
