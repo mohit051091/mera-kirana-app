@@ -18,6 +18,7 @@ const webhookRoutes = require('./webhook');
 const analyticsRoutes = require('./analytics');
 const paymentsRoutes = require('./payments');
 const campaignsRoutes = require('./campaigns');
+const subscriptionsRoutes = require('./subscriptions');
 
 router.get('/health', async (req, res) => {
     try {
@@ -66,5 +67,6 @@ router.use('/coupons', couponsRoutes);
 router.use('/salespeople', salespeopleRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/campaigns', campaignsRoutes);
+router.use('/subscriptions', subscriptionsRoutes);
 
 module.exports = router;

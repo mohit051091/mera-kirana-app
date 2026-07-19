@@ -5,16 +5,16 @@
 - [ ] Connect WhatsApp business account and configure phone webhook URL on Meta dashboard.
 
 ## Planned (Next Iteration)
-- [x] Fix Postgres database schema discrepancies (`conversation_logs` and `partner_availability_logs` creation).
-- [x] Write step-by-step guides for user setup (Railway Postgres setup, Meta catalog setup).
-- [x] Update frontend `/orders` page to fetch live orders from Express server.
-- [x] Create missing frontend page `/partners` to manage delivery team availability.
-- [x] Create missing frontend page `/settings` for WhatsApp credentials configuration.
+- [ ] Phase 4: Multi-Tenant Architecture (Multiple Shops)
+- [ ] Phase 5: Open Network Commerce (ONDC Integration)
 
 ## In Progress
 - [ ] None.
 
 ## Completed
+- [x] Phase 1: Sarvam Saaras Speech-to-Text Integration with Gemini Fallbacks, duration checks, cost markup settings, and rate-limiting.
+- [x] Phase 2: Vernacular Multi-Language Bot (English, Hindi, and Marathi command toggles, dynamically updated user preferences, and translation cards for welcome back/greeting flows).
+- [x] Phase 3: Subscription Management UI (React/Next.js dashboard page with CRUD capabilities and status toggles, unified Express sub-router, and WhatsApp customer schedule controller).
 - [x] Initial codebase audits and dependency graphs generated.
 - [x] Developed missing frontend pages `/partners` and `/settings`.
 - [x] Verified frontend build successfully.

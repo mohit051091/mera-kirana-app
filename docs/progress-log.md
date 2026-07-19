@@ -96,3 +96,11 @@
   7. **Conversational Reorder Shortcuts:** Configured state machine welcoming templates recommending the customer's last order, fast-tracking them directly to payment selection upon confirmation.
   8. **15 E2E UAT Test Validations:** Extended integration test suite verifying COD, DND commands, repeat shortcuts, CRM recovery webhooks, and JWT Bearer authorization blocks. All 15 tests completed with 100% success.
   9. Synchronized codebase dependencies using `graphify`.
+
+## [2026-07-19] Completed Voice STT, Multilingual Toggles & Subscriptions Management (Phases 1, 2, and 3)
+- **Trigger:** Start building Phases 1, 2, and 3 as defined in the project roadmap (Sarvam speech STT, Vernacular Hindi/Marathi bot, and Subscription management UI/client controls).
+- **Action:**
+  1. **Phase 1: Sarvam Saaras Speech-to-Text Integration:** Wired `https://api.sarvam.ai/speech-to-text` with fallback to Gemini 1.5 Flash, OGG granule duration validation to reject large audio files, conversation rate limits, duplicate filtering, and cost markup adjustments to checkout variant prices.
+  2. **Phase 2: Vernacular Language Bot:** Migrated database to support user preferred language columns, created dynamic switches (`ENGLISH`, `HINDI`, `MARATHI`) to store preferences, and translated all key messages, warnings, summaries, and buttons.
+  3. **Phase 3: Subscription Management:** Created `subscriptions.js` backend private router, built Next.js subscriptions panel dashboard UI with calendar/quantity editor cards and status toggles, and added complete WhatsApp customer interactive schedule managers (Pause, Resume, Cancel, and Create new subscription).
+  4. **17 E2E UAT Test Validations:** Extended tests to cover all localized checkout responses, voice, DND, and repeat order paths. All 17 E2E tests succeeded!

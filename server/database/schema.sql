@@ -8,6 +8,7 @@ CREATE TABLE customers (
     name VARCHAR(100),
     dnd_active BOOLEAN DEFAULT FALSE,
     referred_by_salesperson_id UUID,
+    language VARCHAR(5) DEFAULT 'EN',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_active TIMESTAMP WITH TIME ZONE,
     is_blocked BOOLEAN DEFAULT FALSE

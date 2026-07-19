@@ -52,3 +52,10 @@
 - **Decision:** Moved the webhook `try {` block up to encapsulate message parsing, early media validations, and early returns.
 - **Reason:** Guarantees that the phone number is always freed from the active memory lock in the `finally` block, preventing permanent lockout scenarios.
 - **Status:** Approved.
+
+---
+
+## [2026-07-19] Multilingual Routing & Subscriptions Management
+- **Decision:** Integrated dictionary maps `TRANSLATIONS` to render text & buttons dynamically on demand, rather than hardcoding vernacular templates in static templates. For subscriptions, created a React Next.js dashboard panel alongside an Express sub-router and WhatsApp quick-response triggers (Pause/Resume/Cancel).
+- **Reason:** Offers a lightweight, localized client experience, allows managers to quickly modify delivery slots or quantities on a dashboard, and provides customers with zero-friction automation controls directly on WhatsApp.
+- **Status:** Approved.

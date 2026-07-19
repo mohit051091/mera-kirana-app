@@ -31,7 +31,28 @@ router.get('/', async (req, res) => {
       ORDER BY p.base_name ASC;
     `;
         const result = await pool.query(query);
-        res.json(result.rows);
+
+        // Fetch dynamic cost markup from DB settings
+        const markupRes = await pool.query("SELECT value FROM system_settings WHERE key = 'voice_cost_markup'");
+        const markupPercent = markupRes.rows.length ? parseFloat(markupRes.rows[0].value) : 2; // Default 2%
+
+        const products = result.rows.map(row => {
+            const parsedVariants = typeof row.variants === 'string' ? JSON.parse(row.variants) : row.variants;
+            const updatedVariants = (parsedVariants || []).map(v => {
+                const markedUpPrice = parseFloat(v.price) * (1 + markupPercent / 100);
+                return {
+                    ...v,
+                    original_price: v.price,
+                    price: parseFloat(markedUpPrice.toFixed(2)) // Display marked up price
+                };
+            });
+            return {
+                ...row,
+                variants: updatedVariants
+            };
+        });
+
+        res.json(products);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to fetch products' });

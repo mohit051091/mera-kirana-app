@@ -4,6 +4,7 @@ const whatsappService = require('../services/whatsapp');
 const db = require('../database/db');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { logError } = require('../services/logger');
+const axios = require('axios');
 
 // RAM Cache for active users to skip DB lookups for 24 hours.
 const sessionCache = new Map();
@@ -31,6 +32,38 @@ async function logDropoff(customerId, stage, reason, notes = '') {
     } catch (e) {
         logError(e, 'logDropoff');
     }
+}
+
+// Helper: get Ogg Opus audio duration from buffer
+function getOggOpusDuration(buffer) {
+    const OGG_S = Buffer.from('OggS');
+    let lastPageOffset = -1;
+    for (let i = buffer.length - 4; i >= 0; i--) {
+        if (buffer[i] === OGG_S[0] && 
+            buffer[i+1] === OGG_S[1] && 
+            buffer[i+2] === OGG_S[2] && 
+            buffer[i+3] === OGG_S[3]) {
+            lastPageOffset = i;
+            break;
+        }
+    }
+    if (lastPageOffset === -1) throw new Error("Invalid Ogg file: No OggS found");
+    const granulePosition = buffer.readBigInt64LE(lastPageOffset + 6);
+    const sampleRate = 48000n;
+    return Number(granulePosition) / Number(sampleRate);
+}
+
+// Helper: calculate cart subtotal with voice cost markup
+async function getCartSubtotal(cartId) {
+    const totalRes = await db.query(`
+        SELECT SUM(v.price * ci.quantity) as subtotal
+        FROM cart_items ci
+        JOIN product_variants v ON ci.variant_id = v.variant_id
+        WHERE ci.cart_id = $1
+    `, [cartId]);
+    const raw = parseFloat(totalRes.rows[0].subtotal || 0);
+    const markup = parseFloat(await getSetting('voice_cost_markup', 2));
+    return parseFloat((raw * (1 + markup / 100)).toFixed(2));
 }
 
 // GET /webhook/whatsapp - Verification Challenge
@@ -111,6 +144,111 @@ router.post('/whatsapp', async (req, res) => {
     const body = req.body;
     console.log('Incoming Webhook:', JSON.stringify(body, null, 2));
     res.sendStatus(200);
+
+    const TRANSLATIONS = {
+        WELCOME: {
+            EN: `Welcome to *Mera Kirana*! 🏪\n\nChoose an option to start:`,
+            HI: `*मेरा किराना* में आपका स्वागत है! 🏪\n\nशुरू करने के लिए एक विकल्प चुनें:`,
+            MR: `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\nसुरू करण्यासाठी एक पर्याय निवडा:`
+        },
+        TIP_REPEAT: {
+            EN: `💡 *Tip:* You can repeat your last order instantly! Tap below or send a voice note.`,
+            HI: `💡 *सुझाव:* आप अपने पिछले ऑर्डर को तुरंत दोहरा सकते हैं! नीचे टैप करें या वॉइस नोट भेजें।`,
+            MR: `💡 *टीप:* तुम्ही तुमची शेवटची ORDER त्वरित पुन्हा करू शकता! खाली टॅप करा किंवा व्हॉइस नोट पाठवा.`
+        },
+        TIP_NEW: {
+            EN: `💡 *Tip:* You can place orders instantly by sending a voice note! (e.g. "Curd 500g and 1 kg Paneer tomorrow morning"). Since this is your first order, please mention your delivery address & pincode.`,
+            HI: `💡 *सुझाव:* आप वॉइस नोट भेजकर तुरंत ऑर्डर कर सकते हैं! (जैसे "500 ग्राम दही और 1 किलो पनीर कल सुबह")। चूंकि यह आपका पहला ऑर्डर है, कृपया अपना पता और पिनकोड बताएं।`,
+            MR: `💡 *टीप:* तुम्ही व्हॉइस नोट पाठवून त्वरित ऑर्डर करू शकता! (उदा. "500 ग्रॅम दही आणि 1 किलो पनीर उद्या सकाळी"). ही तुमची पहिली ORDER असल्याने, कृपया तुमचा पत्ता आणि पिनकोड सांगा.`
+        },
+        BTN_VIEW_PRODUCTS: {
+            EN: "🛍️ View Products",
+            HI: "🛍️ उत्पाद देखें",
+            MR: "🛍️ उत्पादने पहा"
+        },
+        BTN_MY_ORDERS: {
+            EN: "📦 My Orders",
+            HI: "📦 मेरे ऑर्डर",
+            MR: "📦 माझे ऑर्डर"
+        },
+        BTN_CALL_SHOP: {
+            EN: "📞 Call Shop",
+            HI: "📞 दुकान पर कॉल करें",
+            MR: "📞 दुकानाला कॉल करा"
+        },
+        BTN_SUBSCRIPTIONS: {
+            EN: "📅 Subscriptions",
+            HI: "📅 सदस्यता",
+            MR: "📅 वर्गणी"
+        },
+        CART_EMPTY: {
+            EN: "Your cart is empty! 🛒",
+            HI: "आपकी कार्ट खाली है! 🛒",
+            MR: "तुमची कार्ट रिकामी आहे! 🛒"
+        },
+        MIN_ORDER_WARN: {
+            EN: "⚠️ Minimum order value is *₹$MOV*. Please add items worth *₹$DIFF* more to checkout.",
+            HI: "⚠️ न्यूनतम ऑर्डर मूल्य *₹$MOV* है। चेकआउट करने के लिए कृपया *₹$DIFF* मूल्य के आइटम और जोड़ें।",
+            MR: "⚠️ किमान ऑर्डर मूल्य *₹$MOV* आहे. चेकआउट करण्यासाठी कृपया आणखी *₹$DIFF* किमतीच्या वस्तू जोडा."
+        },
+        BILL_SUMMARY: {
+            EN: `📋 *Order Bill Summary:*\n\n` +
+                `*Subtotal:* ₹$SUB\n` +
+                `*Delivery Fee:* ₹$DEL\n` +
+                `*Total:* ₹$TOT\n\n` +
+                `Select Payment Method:`,
+            HI: `📋 *ऑर्डर बिल सारांश:*\n\n` +
+                `*उप-योग (Subtotal):* ₹$SUB\n` +
+                `*डिलिवरी शुल्क:* ₹$DEL\n` +
+                `*कुल योग (Total):* ₹$TOT\n\n` +
+                `भुगतान विधि चुनें:`,
+            MR: `📋 *ऑर्डर बिल सारांश:*\n\n` +
+                `*उप-एकूण (Subtotal):* ₹$SUB\n` +
+                `*डिलिवरी शुल्क:* ₹$DEL\n` +
+                `*एकूण (Total):* ₹$TOT\n\n` +
+                `पेमेंट पद्धत निवडा:`
+        },
+        BTN_PAY_ONLINE: {
+            EN: "💳 Pay Online",
+            HI: "💳 ऑनलाइन भुगतान",
+            MR: "💳 ऑनलाईन पेमेंट"
+        },
+        BTN_PAY_COD: {
+            EN: "💵 Cash on Delivery",
+            HI: "💵 कैश ऑन डिलीवरी",
+            MR: "💵 कॅश ऑन डिलिव्हरी"
+        },
+        FALLBACK: {
+            EN: `Welcome to *Mera Kirana*! 🏪\n\nI couldn't quite catch that. Tap below to browse products or view orders:`,
+            HI: `*मेरा किराना* में आपका स्वागत है! 🏪\n\nमुझे ठीक से समझ नहीं आया। उत्पादों को देखने या अपने ऑर्डर देखने के लिए नीचे टैप करें:`,
+            MR: `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\nमला नीट समजले नाही. उत्पादने पाहण्यासाठी किंवा तुमच्या ऑर्डर्स पाहण्यासाठी खाली टॅप करा:`
+        },
+        DRAFT_PROMPT: {
+            EN: `👋 We noticed you have an active order draft in progress!\n\nWould you like to resume checkout or browse the catalog to add more items?`,
+            HI: `👋 हमें लगा कि आपका एक ऑर्डर ड्राफ्ट अभी प्रगति पर है!\n\nक्या आप चेकआउट फिर से शुरू करना चाहेंगे या अधिक आइटम जोड़ने के लिए उत्पाद देखना चाहेंगे?`,
+            MR: `👋 आमच्या लक्षात आले की तुमची एक ORDER मसुदा सध्या प्रगतीपथावर आहे!\n\nतुम्ही चेकआउट पुन्हा सुरू करू इच्छिता की अधिक वस्तू जोडण्यासाठी उत्पादने पाहू इच्छिता?`
+        },
+        BTN_RESUME: {
+            EN: "🚀 Resume Checkout",
+            HI: "🚀 चेकआउट जारी रखें",
+            MR: "🚀 चेकआउट सुरू ठेवा"
+        },
+        WELCOME_BACK: {
+            EN: `Welcome back to *Mera Kirana*! 🏪\n\n$SUMMARY\n\nOr choose an option below:`,
+            HI: `*मेरा किराना* में आपका पुनः स्वागत है! 🏪\n\n$SUMMARY\n\nया नीचे एक विकल्प चुनें:`,
+            MR: `*मेरा किराना* मध्ये आपले पुन्हा स्वागत आहे! 🏪\n\n$SUMMARY\n\nकिंवा खालील पर्याय निवडा:`
+        },
+        REPEAT_HEADER: {
+            EN: `🔄 *Repeat Last Order?* (Order #$ID)\n`,
+            HI: `🔄 *पिछला ऑर्डर दोहराएं?* (ऑर्डर #$ID)\n`,
+            MR: `🔄 *शेवटची ऑर्डर पुन्हा करायची?* (ऑर्डर #$ID)\n`
+        },
+        BTN_REPEAT_TITLE: {
+            EN: "🔄 Repeat Last Order",
+            HI: "🔄 पिछला ऑर्डर",
+            MR: "🔄 शेवटची ऑर्डर"
+        }
+    };
 
     if (!body.object) return;
 
@@ -217,11 +355,28 @@ router.post('/whatsapp', async (req, res) => {
                 INSERT INTO customers (phone, name) 
                 VALUES ($1, $2) 
                 ON CONFLICT (phone) DO UPDATE SET last_active = NOW() 
-                RETURNING customer_id, dnd_active
+                RETURNING customer_id, dnd_active, language
             `, [from, 'WhatsApp User']);
             
             customerId = upsertCust.rows[0].customer_id;
             dndActive = upsertCust.rows[0].dnd_active;
+            let userLang = upsertCust.rows[0].language || 'EN';
+
+            // 2.1 Language Selection Trigger Check
+            const cleanText = (text || '').trim().toUpperCase();
+            if (type === 'text' && ['HINDI', 'MARATHI', 'ENGLISH'].includes(cleanText)) {
+                userLang = cleanText === 'HINDI' ? 'HI' : (cleanText === 'MARATHI' ? 'MR' : 'EN');
+                await db.query('UPDATE customers SET language = $1 WHERE customer_id = $2', [userLang, customerId]);
+                
+                const confirmations = {
+                    EN: "Language updated to English. How can I help you today?",
+                    HI: "भाषा बदलकर हिंदी कर दी गई है। आज मैं आपकी क्या सहायता कर सकता हूँ?",
+                    MR: "भाषा बदलून मराठी करण्यात आली आहे. आज मी आपली काय मदत करू शकतो?"
+                };
+                await whatsappService.sendText(from, confirmations[userLang]);
+                await whatsappService.markAsRead(messageId);
+                return;
+            }
 
             // Human handoff stage check
             const cartResTemp = await db.query("SELECT cart_id, session_metadata FROM carts WHERE customer_id = $1 AND status = 'ACTIVE' LIMIT 1", [customerId]);
@@ -329,32 +484,159 @@ router.post('/whatsapp', async (req, res) => {
             // 6. PROCESS VOICE ORDER (STT parser)
             let voiceParsed = null;
             if (type === 'audio' && audioId) {
-                const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-                if (!apiKey) {
-                    await whatsappService.sendText(from, "Voice ordering is currently offline. Please use text checkout.");
+                // 6.1 Check Rate Limits
+                const hourlyLimit = await getSetting('voice_rate_limit_hourly', 3);
+                const dailyLimit = await getSetting('voice_rate_limit_daily', 10);
+                
+                const nowTime = new Date();
+                const oneHourAgo = new Date(nowTime.getTime() - 60 * 60 * 1000);
+                const oneDayAgo = new Date(nowTime.getTime() - 24 * 60 * 60 * 1000);
+                
+                const hourlyCountRes = await db.query(`
+                    SELECT COUNT(*) as count 
+                    FROM conversation_logs 
+                    WHERE customer_phone = $1 
+                      AND message_type = 'incoming' 
+                      AND processing_type = 'voice'
+                      AND created_at >= $2
+                `, [from, oneHourAgo]);
+                
+                const dailyCountRes = await db.query(`
+                    SELECT COUNT(*) as count 
+                    FROM conversation_logs 
+                    WHERE customer_phone = $1 
+                      AND message_type = 'incoming' 
+                      AND processing_type = 'voice'
+                      AND created_at >= $2
+                `, [from, oneDayAgo]);
+                
+                const hourlyCount = parseInt(hourlyCountRes.rows[0].count);
+                const dailyCount = parseInt(dailyCountRes.rows[0].count);
+                
+                if (hourlyCount >= hourlyLimit) {
+                    await whatsappService.sendText(from, `⚠️ *Limit Exceeded*\n\nYou have sent too many voice notes recently. Please type your message instead, or try again in an hour.`);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+                
+                if (dailyCount >= dailyLimit) {
+                    await whatsappService.sendText(from, `⚠️ *Limit Exceeded*\n\nYou have hit your daily limit of ${dailyLimit} voice orders. Please use text messaging to place your order.`);
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
 
-                try {
-                    console.log(`Downloading voice note media ID: ${audioId}`);
-                    const { buffer, mimeType } = await whatsappService.downloadMedia(audioId);
+                // 6.2 Check duplicate hash de-duplication
+                const sha256 = msg.audio ? msg.audio.sha256 : null;
+                if (sha256) {
+                    const recentDuplicateRes = await db.query(`
+                        SELECT 1 
+                        FROM conversation_logs 
+                        WHERE customer_phone = $1 
+                          AND created_at > NOW() - INTERVAL '1 minute'
+                          AND metadata->'audio'->>'sha256' = $2
+                        LIMIT 1
+                    `, [from, sha256]);
                     
-                    const genAI = new GoogleGenerativeAI(apiKey);
-                    const model = genAI.getGenerativeModel({
-                        model: "gemini-1.5-flash",
-                        generationConfig: { responseMimeType: "application/json" }
-                    });
+                    if (recentDuplicateRes.rowCount > 0) {
+                        console.log(`Duplicate voice note hash detected from ${from}, skipping.`);
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                }
 
-                    const systemPrompt = `
-You are a structured parser for a dairy shop. You extract order items, addresses, and delivery slot details from customer voice messages.
+                // Download audio file
+                console.log(`Downloading voice note media ID: ${audioId}`);
+                const { buffer, mimeType } = await whatsappService.downloadMedia(audioId);
+
+                // 6.3 Duration check
+                let durationSecs = 0;
+                try {
+                    durationSecs = getOggOpusDuration(buffer);
+                    console.log(`Audio file duration: ${durationSecs} seconds`);
+                } catch (durErr) {
+                    console.warn('Could not parse audio duration from buffer:', durErr.message);
+                }
+
+                const durationCap = await getSetting('voice_duration_cap', 30);
+                if (durationSecs > durationCap) {
+                    await whatsappService.sendText(from, `⚠️ *Voice Note Too Long*\n\nPlease keep your voice notes under ${durationCap} seconds.`);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                // Try Sarvam Saaras v3 STT first
+                let rawTranscript = null;
+                const sarvamKey = process.env.SARVAM_API_KEY;
+                const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+                
+                if (sarvamKey) {
+                    try {
+                        console.log('Sending audio to Sarvam Saaras v3 REST API...');
+                        const formData = new FormData();
+                        const blob = new Blob([buffer], { type: mimeType });
+                        formData.append('file', blob, 'audio.ogg');
+                        formData.append('model', 'saaras:v3');
+                        formData.append('language_code', 'unknown'); // Auto-detect
+                        formData.append('mode', 'translate'); // Translate to English text
+                        
+                        const sarvamRes = await axios.post('https://api.sarvam.ai/speech-to-text', formData, {
+                            headers: {
+                                'api-subscription-key': sarvamKey
+                            }
+                        });
+                        rawTranscript = sarvamRes.data.transcript;
+                        console.log('Sarvam transcription output:', rawTranscript);
+                    } catch (sarvamErr) {
+                        logError(sarvamErr, 'Sarvam_STT_API_failed');
+                    }
+                }
+
+                // Fallback to Gemini if Sarvam is not configured or fails
+                if (!rawTranscript && geminiKey) {
+                    try {
+                        console.log('Falling back to Gemini for direct speech transcription...');
+                        const genAI = new GoogleGenerativeAI(geminiKey);
+                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                        const prompt = "Transcribe this audio recording verbatim. Translate any Hindi or Marathi terms into standard English text.";
+                        const geminiRes = await model.generateContent([
+                            {
+                                inlineData: {
+                                    data: buffer.toString("base64"),
+                                    mimeType: mimeType
+                                }
+                            },
+                            { text: prompt }
+                        ]);
+                        rawTranscript = geminiRes.response.text();
+                        console.log('Gemini transcription output:', rawTranscript);
+                    } catch (geminiErr) {
+                        logError(geminiErr, 'Gemini_STT_fallback_failed');
+                    }
+                }
+
+                if (!rawTranscript) {
+                    await whatsappService.sendText(from, "Sorry, I couldn't transcribe your voice note. Please try again or type your message.");
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                // Step 2: Use Gemini to parse rawTranscript into JSON schema
+                if (geminiKey) {
+                    try {
+                        const genAI = new GoogleGenerativeAI(geminiKey);
+                        const model = genAI.getGenerativeModel({
+                            model: "gemini-1.5-flash",
+                            generationConfig: { responseMimeType: "application/json" }
+                        });
+                        
+                        const systemPrompt = `
+You are a structured parser for a kirana dairy shop. You extract order items, addresses, and delivery slot details from customer voice messages.
 You MUST output a raw JSON object matching this schema ONLY.
 
 {
   "items": [{"name": "string", "quantity": "number"}],
   "address": {"street": "string", "pincode": "string"},
-  "delivery_slot": {"date": "string", "slot": "string"},
-  "detected_language": "string"
+  "delivery_slot": {"date": "string", "slot": "string"}
 }
 
 Catalog Products & Synonyms:
@@ -374,25 +656,20 @@ Rules:
 2. Extract address and 6-digit postal pincode.
 3. Extract slots. Date should be "today" or "tomorrow". Slot must be "morning", "noon", or "evening".
 4. If a field is not mentioned, set it to null.
-5. Set detected_language to the spoken vernacular language code (e.g. "hi-IN", "mr-IN", "en-US").
 `;
-
-                    const response = await model.generateContent([
-                        {
-                            inlineData: {
-                                data: buffer.toString("base64"),
-                                mimeType: mimeType
-                            }
-                        },
-                        { text: systemPrompt }
-                    ]);
-
-                    voiceParsed = JSON.parse(response.response.text());
-                    console.log('Gemini voice extraction results:', voiceParsed);
-
-                } catch (err) {
-                    logError(err, 'Gemini_voice_parse');
-                    await whatsappService.sendText(from, "Sorry, I couldn't catch that. Could you please specify your dairy order?");
+                        const response = await model.generateContent([
+                            { text: rawTranscript },
+                            { text: systemPrompt }
+                        ]);
+                        voiceParsed = JSON.parse(response.response.text());
+                        console.log('Gemini voice structural extraction results:', voiceParsed);
+                    } catch (structErr) {
+                        logError(structErr, 'Gemini_structural_extraction_failed');
+                    }
+                }
+                
+                if (!voiceParsed) {
+                    await whatsappService.sendText(from, "Sorry, I couldn't process your voice order. Please try again or type your message.");
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
@@ -470,13 +747,7 @@ Rules:
                 // Check for One-Shot complete order conditions
                 const cartItemsCheck = await db.query('SELECT 1 FROM cart_items WHERE cart_id = $1', [cartId]);
                 
-                const totalRes = await db.query(`
-                    SELECT SUM(v.price * ci.quantity) as subtotal
-                    FROM cart_items ci
-                    JOIN product_variants v ON ci.variant_id = v.variant_id
-                    WHERE ci.cart_id = $1
-                `, [cartId]);
-                const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                const subtotal = await getCartSubtotal(cartId);
                 const mov = await getSetting('minimum_order_value', 150);
 
                 if (cartItemsCheck.rows.length > 0 && metadata.address_id && metadata.slot && subtotal >= mov) {
@@ -570,34 +841,43 @@ Rules:
 
                 if (hasLastOrder) {
                     const lastOrder = lastOrderQuery.rows[0];
-                    let repeatSummary = `🔄 *Repeat Last Order?* (Order #${lastOrder.readable_order_id})\n`;
+                    let repeatSummary = TRANSLATIONS.REPEAT_HEADER[userLang].replace('$ID', lastOrder.readable_order_id);
                     lastOrder.items.forEach(item => {
                         repeatSummary += `• ${item.base_name} (${item.weight_label}) x ${item.quantity}\n`;
                     });
-                    repeatSummary += `Total: *₹${parseFloat(lastOrder.total_amount).toFixed(2)}*`;
+                    const totalLabel = userLang === 'HI' ? 'कुल योग' : (userLang === 'MR' ? 'एकूण' : 'Total');
+                    repeatSummary += `${totalLabel}: *₹${parseFloat(lastOrder.total_amount).toFixed(2)}*`;
 
                     const buttons = [
-                        { id: `btn_repeat_last_${lastOrder.order_id}`, title: '🔄 Repeat Last Order' },
-                        { id: 'btn_products', title: '🛍️ Browse Products' },
-                        { id: 'btn_orders', title: '📦 My Orders' }
+                        { id: `btn_repeat_last_${lastOrder.order_id}`, title: TRANSLATIONS.BTN_REPEAT_TITLE[userLang] },
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_view_subscriptions', title: TRANSLATIONS.BTN_SUBSCRIPTIONS[userLang] }
                     ];
-                    await whatsappService.sendButtons(from, `Welcome back to *Mera Kirana*! 🏪\n\n${repeatSummary}\n\nOr choose an option below:`, buttons);
+                    const welcomeBackMsg = TRANSLATIONS.WELCOME_BACK[userLang].replace('$SUMMARY', repeatSummary);
+                    await whatsappService.sendButtons(from, welcomeBackMsg, buttons);
                 } else {
                     const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
                     const hasAddress = addrCheck.rows.length > 0;
                     let tipText = "";
                     if (hasAddress) {
-                        tipText = `💡 *Tip:* Since you've ordered with us before, you can place a new order by sending a voice note containing only products & timing! (e.g. "1 kg Curd kal subah 9 baje bhej do"). We'll automatically deliver to your saved address!`;
+                        tipText = TRANSLATIONS.TIP_REPEAT[userLang];
                     } else {
-                        tipText = `💡 *Tip:* You can place orders instantly by sending a 10-second voice note! (e.g. "Curd 500g aur 1 kg Paneer kal subah 9 baje bhandup west pin 400078 par bhej do"). Since this is your first order, please mention your delivery address & pincode in the voice note!`;
+                        tipText = TRANSLATIONS.TIP_NEW[userLang];
                     }
 
                     const buttons = [
-                        { id: 'btn_products', title: '🛍️ View Products' },
-                        { id: 'btn_orders', title: '📦 My Orders' },
-                        { id: 'btn_support', title: '📞 Call Shop' }
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] },
+                        { id: 'btn_view_subscriptions', title: TRANSLATIONS.BTN_SUBSCRIPTIONS[userLang] }
                     ];
-                    await whatsappService.sendButtons(from, `Welcome to *Mera Kirana*! 🏪\n\n${tipText}\n\nChoose an option to start:`, buttons);
+                    
+                    const welcomeMsg = userLang === 'EN' 
+                        ? `Welcome to *Mera Kirana*! 🏪\n\n${tipText}\n\nChoose an option to start:`
+                        : (userLang === 'HI' 
+                            ? `*मेरा किराना* में आपका स्वागत है! 🏪\n\n${tipText}\n\nशुरू करने के लिए एक विकल्प चुनें:` 
+                            : `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\n${tipText}\n\nसुरू करण्यासाठी एक पर्याय निवडा:`);
+
+                    await whatsappService.sendButtons(from, welcomeMsg, buttons);
                 }
                 await whatsappService.markAsRead(messageId);
                 return;
@@ -605,6 +885,153 @@ Rules:
 
             if (interactive && interactive.button_reply) {
                 const buttonId = interactive.button_reply.id;
+
+                if (buttonId === 'btn_view_subscriptions') {
+                    const subsQuery = await db.query(`
+                        SELECT s.subscription_id, s.quantity, s.frequency, s.status, pv.weight_label, p.base_name
+                        FROM subscriptions s
+                        JOIN product_variants pv ON s.variant_id = pv.variant_id
+                        JOIN products p ON pv.product_id = p.product_id
+                        WHERE s.customer_id = $1
+                    `, [customerId]);
+
+                    if (subsQuery.rows.length === 0) {
+                        const welcomeText = userLang === 'HI' 
+                            ? "📅 *आपकी कोई सक्रिय सदस्यता नहीं है।*\n\nक्या आप दूध या दही की दैनिक डिलीवरी शुरू करना चाहते हैं?"
+                            : (userLang === 'MR' 
+                                ? "📅 *तुमची कोणतीही सक्रिय वर्गणी नाही.*\n\nतुम्ही दूध किंवा दहीची दैनिक डिलिव्हरी सुरू करू इच्छिता?" 
+                                : "📅 *You have no active subscription schedules.*\n\nWould you like to set up repeating daily deliveries of dairy items?");
+                        
+                        const newTitle = userLang === 'HI' ? '🆕 नई सदस्यता' : (userLang === 'MR' ? '🆕 नवीन वर्गणी' : '🆕 New Subscription');
+                        const buttons = [
+                            { id: 'btn_sub_new', title: newTitle },
+                            { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] }
+                        ];
+                        await whatsappService.sendButtons(from, welcomeText, buttons);
+                    } else {
+                        let summary = userLang === 'HI' ? "📅 *आपकी सदस्यताएँ:*\n\n" : (userLang === 'MR' ? "📅 *तुमच्या वर्गणी:*\n\n" : "📅 *Your Subscriptions:*\n\n");
+                        subsQuery.rows.forEach((sub, idx) => {
+                            const statusStr = sub.status === 'ACTIVE' 
+                                ? (userLang === 'HI' ? 'सक्रिय' : (userLang === 'MR' ? 'सक्रिय' : 'Active'))
+                                : (userLang === 'HI' ? 'रुका हुआ' : (userLang === 'MR' ? 'थांबवले' : 'Paused'));
+                            summary += `*${idx + 1}.* ${sub.base_name} (${sub.weight_label}) x ${sub.quantity} [${sub.frequency}] - Status: *${statusStr}*\n`;
+                        });
+                        summary += userLang === 'HI' ? "\nनीचे दी गई किसी सदस्यता को प्रबंधित करें:" : (userLang === 'MR' ? "\nखालीलपैकी कोणतीही वर्गणी व्यवस्थापित करा:" : "\nManage any of your subscriptions below:");
+
+                        const sub = subsQuery.rows[0];
+                        const buttons = [];
+                        if (sub.status === 'ACTIVE') {
+                            const pauseLabel = userLang === 'HI' ? '⏸️ रोकें' : (userLang === 'MR' ? '⏸️ थांबवा' : '⏸️ Pause');
+                            buttons.push({ id: `btn_sub_pause_${sub.subscription_id}`, title: `${pauseLabel} (${sub.base_name.substring(0,6)})` });
+                        } else {
+                            const resumeLabel = userLang === 'HI' ? '▶️ शुरू करें' : (userLang === 'MR' ? '▶️ सुरू करा' : '▶️ Resume');
+                            buttons.push({ id: `btn_sub_resume_${sub.subscription_id}`, title: `${resumeLabel} (${sub.base_name.substring(0,6)})` });
+                        }
+                        const cancelLabel = userLang === 'HI' ? '❌ रद्द करें' : (userLang === 'MR' ? '❌ रद्द करा' : '❌ Cancel');
+                        buttons.push({ id: `btn_sub_cancel_${sub.subscription_id}`, title: `${cancelLabel} (${sub.base_name.substring(0,6)})` });
+                        
+                        const newTitle = userLang === 'HI' ? '🆕 नई जोड़ें' : (userLang === 'MR' ? '🆕 नवीन जोडा' : '🆕 Add New');
+                        buttons.push({ id: 'btn_sub_new', title: newTitle });
+                        
+                        await whatsappService.sendButtons(from, summary, buttons);
+                    }
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId.startsWith('btn_sub_pause_')) {
+                    const subId = buttonId.replace('btn_sub_pause_', '');
+                    await db.query("UPDATE subscriptions SET status = 'PAUSED' WHERE subscription_id = $1", [subId]);
+                    const text = userLang === 'HI' 
+                        ? "⏸️ आपकी डिलीवरी रोक दी गई है। आप इसे कभी भी शुरू कर सकते हैं!"
+                        : (userLang === 'MR' ? "⏸️ तुमची डिलिव्हरी थांबवली गेली आहे. तुम्ही कधीही सुरू करू शकता!" : "⏸️ Delivery schedule paused. You can resume at any time!");
+                    await whatsappService.sendText(from, text);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId.startsWith('btn_sub_resume_')) {
+                    const subId = buttonId.replace('btn_sub_resume_', '');
+                    await db.query("UPDATE subscriptions SET status = 'ACTIVE' WHERE subscription_id = $1", [subId]);
+                    const text = userLang === 'HI' 
+                        ? "▶️ आपकी डिलीवरी फिर से शुरू कर दी गई है!"
+                        : (userLang === 'MR' ? "▶️ तुमची डिलिव्हरी पुन्हा सुरू झाली आहे!" : "▶️ Delivery schedule resumed successfully!");
+                    await whatsappService.sendText(from, text);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId.startsWith('btn_sub_cancel_')) {
+                    const subId = buttonId.replace('btn_sub_cancel_', '');
+                    await db.query("DELETE FROM subscriptions WHERE subscription_id = $1", [subId]);
+                    const text = userLang === 'HI' 
+                        ? "❌ आपकी सदस्यता सफलतापूर्वक रद्द कर दी गई है।"
+                        : (userLang === 'MR' ? "❌ तुमची वर्गणी यशस्वीरित्या रद्द करण्यात आली आहे." : "❌ Subscription schedule cancelled and deleted successfully.");
+                    await whatsappService.sendText(from, text);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId === 'btn_sub_new') {
+                    const variantsRes = await db.query(`
+                        SELECT pv.variant_id, pv.weight_label, pv.price, p.base_name
+                        FROM product_variants pv
+                        JOIN products p ON pv.product_id = p.product_id
+                        WHERE pv.is_active = true AND p.is_active = true
+                        ORDER BY p.base_name ASC, pv.price ASC
+                    `);
+                    
+                    const rows = variantsRes.rows.map(v => ({
+                        id: `sub_select_var_${v.variant_id}`,
+                        title: `${v.base_name} (${v.weight_label})`.substring(0, 24),
+                        description: `₹${v.price} / delivery`
+                    }));
+                    
+                    const sections = [
+                        {
+                            title: userLang === 'HI' ? "दूध और डेयरी उत्पाद" : (userLang === 'MR' ? "दूध आणि डेअरी उत्पादने" : "Dairy Products"),
+                            rows: rows
+                        }
+                    ];
+                    
+                    const listBody = userLang === 'HI' 
+                        ? "कृपया उस उत्पाद का चयन करें जिसे आप नियमित रूप से डिलीवर करवाना चाहते हैं:" 
+                        : (userLang === 'MR' ? "कृपया नियमितपणे डिलिव्हर करू इच्छित असलेले उत्पादन निवडा:" : "Please select the product you would like to have delivered regularly:");
+                    
+                    const listTitle = userLang === 'HI' ? "उत्पाद चुनें" : (userLang === 'MR' ? "उत्पादन निवडा" : "Choose Product");
+                    
+                    await whatsappService.sendList(from, listTitle, listBody, listTitle, sections);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId.startsWith('btn_sub_freq_')) {
+                    const frequency = buttonId.replace('btn_sub_freq_', '');
+                    const variantId = metadata.sub_variant_id;
+                    
+                    const tomorrow = new Date();
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    const dateStr = tomorrow.toISOString().split('T')[0];
+                    
+                    await db.query(`
+                        INSERT INTO subscriptions (customer_id, variant_id, quantity, frequency, status, next_delivery_date)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                    `, [customerId, variantId, 1, frequency, 'ACTIVE', dateStr]);
+                    
+                    metadata.stage = 'START';
+                    metadata.sub_variant_id = null;
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    
+                    const successText = userLang === 'HI'
+                        ? `🎉 *सदस्यता सफल!*\n\nआपकी आवर्ती डिलीवरी सफलतापूर्वक सेट हो गई है। पहली डिलीवरी कल होगी!`
+                        : (userLang === 'MR'
+                            ? `🎉 *वर्गणी यशस्वी!*\n\nतुमची डिलिव्हरी यशस्वीरित्या सेट केली गेली आहे. पहिली डिलिव्हरी उद्या होईल!`
+                            : `🎉 *Subscription Created Successfully!*\n\nYour recurring shipment has been set up. Your first delivery is scheduled for tomorrow!`);
+                            
+                    await whatsappService.sendText(from, successText);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
 
                 if (buttonId.startsWith('btn_repeat_last_')) {
                     const lastOrderId = buttonId.replace('btn_repeat_last_', '');
@@ -739,13 +1166,7 @@ Rules:
                     }
                 } else if (buttonId === 'btn_checkout' || buttonId === 'btn_resume_checkout') {
                     // Check Minimum order values
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                    const subtotal = await getCartSubtotal(cartId);
 
                     if (subtotal === 0) {
                         await whatsappService.sendText(from, "Your cart is empty! 🛒");
@@ -755,7 +1176,11 @@ Rules:
 
                     const mov = await getSetting('minimum_order_value', 150);
                     if (subtotal < mov) {
-                        await whatsappService.sendText(from, `⚠️ Minimum order value is *₹${mov}*. Please add items worth *₹${(mov - subtotal).toFixed(2)}* more to checkout.`);
+                        const diff = (mov - subtotal).toFixed(2);
+                        const msgText = TRANSLATIONS.MIN_ORDER_WARN[userLang]
+                            .replace('$MOV', mov)
+                            .replace('$DIFF', diff);
+                        await whatsappService.sendText(from, msgText);
                         await whatsappService.markAsRead(messageId);
                         return;
                     }
@@ -841,26 +1266,19 @@ Rules:
                     await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
 
                     // Calc Order totals & fees
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                    const subtotal = await getCartSubtotal(cartId);
 
                     const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                     const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
 
-                    const paymentText = `📋 *Order Bill Summary:*\n\n` +
-                        `*Subtotal:* ₹${subtotal.toFixed(2)}\n` +
-                        `*Delivery Fee:* ₹${deliveryFee.toFixed(2)}\n` +
-                        `*Total:* ₹${(subtotal + deliveryFee).toFixed(2)}\n\n` +
-                        `Select Payment Method:`;
+                    const paymentText = TRANSLATIONS.BILL_SUMMARY[userLang]
+                        .replace('$SUB', subtotal.toFixed(2))
+                        .replace('$DEL', deliveryFee.toFixed(2))
+                        .replace('$TOT', (subtotal + deliveryFee).toFixed(2));
                     
                     const buttons = [
-                        { id: 'pay_upi', title: '💳 Pay Online' },
-                        { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                        { id: 'pay_upi', title: TRANSLATIONS.BTN_PAY_ONLINE[userLang] },
+                        { id: 'pay_cod', title: TRANSLATIONS.BTN_PAY_COD[userLang] }
                     ];
                     await whatsappService.sendButtons(from, paymentText, buttons);
 
@@ -941,8 +1359,12 @@ Rules:
                             return;
                         }
 
+                        const markup = parseFloat(await getSetting('voice_cost_markup', 2));
                         let subtotal = 0;
-                        cartItems.rows.forEach(i => subtotal += (i.price * i.quantity));
+                        cartItems.rows.forEach(i => {
+                            const markedUpPrice = parseFloat(i.price) * (1 + markup / 100);
+                            subtotal += (markedUpPrice * i.quantity);
+                        });
 
                         const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                         let deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
@@ -985,10 +1407,11 @@ Rules:
 
                         // 2. Add order items
                         for (const i of cartItems.rows) {
+                            const unitPriceMarkedUp = parseFloat(i.price) * (1 + markup / 100);
                             await client.query(`
                                 INSERT INTO order_items (order_id, variant_id, quantity, unit_price, total_price) 
                                 VALUES ($1, $2, $3, $4, $5)
-                            `, [orderId, i.variant_id, i.quantity, i.price, i.price * i.quantity]);
+                            `, [orderId, i.variant_id, i.quantity, unitPriceMarkedUp, unitPriceMarkedUp * i.quantity]);
                         }
 
                         // 3. Mark salesperson commission if referred
@@ -1090,6 +1513,27 @@ Rules:
             if (interactive && interactive.list_reply) {
                 const listId = interactive.list_reply.id;
                 
+                if (listId.startsWith('sub_select_var_')) {
+                    const variantId = listId.replace('sub_select_var_', '');
+                    metadata.sub_variant_id = variantId;
+                    metadata.stage = 'SUB_CHOOSE_FREQUENCY';
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    
+                    const buttons = [
+                        { id: 'btn_sub_freq_DAILY', title: '🔄 Daily' },
+                        { id: 'btn_sub_freq_ALTERNATE', title: '🔄 Alternate Days' },
+                        { id: 'btn_sub_freq_WEEKLY', title: '🔄 Weekly' }
+                    ];
+                    
+                    const bodyText = userLang === 'HI' 
+                        ? "कृपया डिलीवरी की आवृत्ति (Frequency) चुनें:" 
+                        : (userLang === 'MR' ? "कृपया डिलिव्हरीची वारंवारता निवडा:" : "Please select the delivery frequency:");
+                    
+                    await whatsappService.sendButtons(from, bodyText, buttons);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
                 if (listId === 'btn_change_addr') {
                     await whatsappService.sendAddressMessage(from, "🏠 *Enter Delivery Address*");
                     await whatsappService.markAsRead(messageId);
@@ -1101,26 +1545,19 @@ Rules:
                     await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
 
                     // Calc Order totals & fees
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                    const subtotal = await getCartSubtotal(cartId);
 
                     const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                     const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
 
-                    const paymentText = `📋 *Order Bill Summary:*\n\n` +
-                        `*Subtotal:* ₹${subtotal.toFixed(2)}\n` +
-                        `*Delivery Fee:* ₹${deliveryFee.toFixed(2)}\n` +
-                        `*Total:* ₹${(subtotal + deliveryFee).toFixed(2)}\n\n` +
-                        `Select Payment Method:`;
+                    const paymentText = TRANSLATIONS.BILL_SUMMARY[userLang]
+                        .replace('$SUB', subtotal.toFixed(2))
+                        .replace('$DEL', deliveryFee.toFixed(2))
+                        .replace('$TOT', (subtotal + deliveryFee).toFixed(2));
                     
                     const buttons = [
-                        { id: 'pay_upi', title: '💳 Pay Online' },
-                        { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                        { id: 'pay_upi', title: TRANSLATIONS.BTN_PAY_ONLINE[userLang] },
+                        { id: 'pay_cod', title: TRANSLATIONS.BTN_PAY_COD[userLang] }
                     ];
                     await whatsappService.sendButtons(from, paymentText, buttons);
                     await whatsappService.markAsRead(messageId);
@@ -1243,13 +1680,7 @@ Rules:
                 if (couponRes.rows.length > 0) {
                     const coupon = couponRes.rows[0];
                     
-                    const totalRes = await db.query(`
-                        SELECT SUM(v.price * ci.quantity) as subtotal
-                        FROM cart_items ci
-                        JOIN product_variants v ON ci.variant_id = v.variant_id
-                        WHERE ci.cart_id = $1
-                    `, [cartId]);
-                    const subtotal = parseFloat(totalRes.rows[0].subtotal || 0);
+                    const subtotal = await getCartSubtotal(cartId);
 
                     if (subtotal < parseFloat(coupon.min_order_value || 0)) {
                         await whatsappService.sendText(from, `⚠️ Coupon *${possibleCoupon}* requires a minimum order value of *₹${coupon.min_order_value}*. Current subtotal is *₹${subtotal.toFixed(2)}*.`);
@@ -1268,16 +1699,23 @@ Rules:
                         const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                         const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
 
-                        const paymentText = `📋 *Updated Order Bill Summary:*\n\n` +
-                            `*Subtotal:* ₹${subtotal.toFixed(2)}\n` +
-                            `*Coupon Discount (${possibleCoupon}):* -₹${discount.toFixed(2)}\n` +
-                            `*Delivery Fee:* ₹${deliveryFee.toFixed(2)}\n` +
-                            `*Total:* ₹${(subtotal - discount + deliveryFee).toFixed(2)}\n\n` +
-                            `Select Payment Method:`;
+                        const discountHeader = userLang === 'HI' ? 'कूपन छूट' : (userLang === 'MR' ? 'कूपन सूट' : 'Coupon Discount');
+                        const updatedTitle = userLang === 'HI' ? 'अद्यतन ऑर्डर बिल सारांश' : (userLang === 'MR' ? 'अपडेटेड ऑर्डर बिल सारांश' : 'Updated Order Bill Summary');
+                        const paymentMethodSelect = userLang === 'HI' ? 'भुगतान विधि चुनें:' : (userLang === 'MR' ? 'पेमेंट पद्धत निवडा:' : 'Select Payment Method:');
+                        const totalLabel = userLang === 'HI' ? 'कुल योग' : (userLang === 'MR' ? 'एकूण' : 'Total');
+                        const subtotalLabel = userLang === 'HI' ? 'उप-योग' : (userLang === 'MR' ? 'उप-एकूण' : 'Subtotal');
+                        const delLabel = userLang === 'HI' ? 'डिलिवरी शुल्क' : (userLang === 'MR' ? 'डिलिवरी शुल्क' : 'Delivery Fee');
+                        
+                        const paymentText = `📋 *${updatedTitle}:*\n\n` +
+                            `*${subtotalLabel}:* ₹${subtotal.toFixed(2)}\n` +
+                            `*${discountHeader} (${possibleCoupon}):* -₹${discount.toFixed(2)}\n` +
+                            `*${delLabel}:* ₹${deliveryFee.toFixed(2)}\n` +
+                            `*${totalLabel}:* ₹${(subtotal - discount + deliveryFee).toFixed(2)}\n\n` +
+                            `${paymentMethodSelect}`;
                         
                         const buttons = [
-                            { id: 'pay_upi', title: '💳 Pay Online' },
-                            { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                            { id: 'pay_upi', title: TRANSLATIONS.BTN_PAY_ONLINE[userLang] },
+                            { id: 'pay_cod', title: TRANSLATIONS.BTN_PAY_COD[userLang] }
                         ];
                         await whatsappService.sendButtons(from, paymentText, buttons);
                     }
@@ -1324,19 +1762,19 @@ Rules:
                 
                 if (metadata.stage && metadata.stage !== 'START' && ageMs < ONE_DAY_IN_MS) {
                     const buttons = [
-                        { id: 'btn_resume_checkout', title: '🚀 Resume Checkout' },
-                        { id: 'btn_products', title: '🛍️ Browse Products' }
+                        { id: 'btn_resume_checkout', title: TRANSLATIONS.BTN_RESUME[userLang] },
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] }
                     ];
-                    await whatsappService.sendButtons(from, `👋 We noticed you have an active order draft in progress!\n\nWould you like to resume checkout or browse the catalog to add more items?`, buttons);
+                    await whatsappService.sendButtons(from, TRANSLATIONS.DRAFT_PROMPT[userLang], buttons);
                 } else {
                     metadata = { stage: 'START' };
                     await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
                     
                     const buttons = [
-                        { id: 'btn_products', title: '🛍️ Browse Products' },
-                        { id: 'btn_orders', title: '📦 My Orders' }
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] }
                     ];
-                    await whatsappService.sendButtons(from, `Welcome to *Mera Kirana*! 🏪\n\nI couldn't quite catch that. Tap below to browse products or view orders:`, buttons);
+                    await whatsappService.sendButtons(from, TRANSLATIONS.FALLBACK[userLang], buttons);
                 }
                 await whatsappService.markAsRead(messageId);
                 return;

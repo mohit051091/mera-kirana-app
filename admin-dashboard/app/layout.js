@@ -3,7 +3,7 @@ import './globals.css';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import { LayoutDashboard, BarChart2, ShoppingBag, Package, Users, Settings, LogOut, Megaphone, Menu, X } from 'lucide-react';
+import { LayoutDashboard, BarChart2, ShoppingBag, Package, Users, Settings, LogOut, Megaphone, Menu, X, Calendar } from 'lucide-react';
 
 export default function RootLayout({ children }) {
     const router = useRouter();
@@ -94,6 +94,11 @@ export default function RootLayout({ children }) {
                             pathname === '/orders' ? 'bg-green-50 text-green-700' : 'text-gray-600 hover:bg-gray-50'
                         }`}>
                             <ShoppingBag size={18} /> Orders
+                        </Link>
+                        <Link href="/subscriptions" className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition ${
+                            pathname === '/subscriptions' ? 'bg-green-50 text-green-700' : 'text-gray-600 hover:bg-gray-50'
+                        }`}>
+                            <Calendar size={18} /> Subscriptions
                         </Link>
                         <Link href="/products" className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold transition ${
                             pathname === '/products' ? 'bg-green-50 text-green-700' : 'text-gray-600 hover:bg-gray-50'

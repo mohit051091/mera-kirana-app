@@ -257,6 +257,18 @@ async function runMigration() {
             console.log('✅ Added Column: processing_type to conversation_logs');
         }
 
+        // 16. Verify/Alter customers schema for preferred language
+        const customerColsRes = await pool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'customers';
+        `);
+        const customerCols = customerColsRes.rows.map(r => r.column_name);
+        if (!customerCols.includes('language')) {
+            await pool.query(`ALTER TABLE customers ADD COLUMN language VARCHAR(5) DEFAULT 'EN';`);
+            console.log('✅ Added Column: language to customers');
+        }
+
         console.log('🎉 Database Migration Successful!');
     } catch (err) {
         console.error('❌ Migration Failed:', err.message);

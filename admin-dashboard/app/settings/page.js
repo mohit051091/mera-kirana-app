@@ -4,7 +4,7 @@ import api from '@/lib/api';
 import { 
     Settings, Save, Shield, HelpCircle, Check, Database, 
     MessageSquare, Clock, MapPin, X, Loader, UploadCloud, 
-    AlertCircle, Power
+    AlertCircle, Power, Mic
 } from 'lucide-react';
 
 export default function SettingsPage() {
@@ -20,7 +20,12 @@ export default function SettingsPage() {
         online_discount: 5,
         rider_slot_limit: 10,
         vacation_mode: { is_closed: false },
-        payment_vpa: 'merakirana@okaxis'
+        payment_vpa: 'merakirana@okaxis',
+        voice_rate_limit_hourly: 3,
+        voice_rate_limit_daily: 10,
+        voice_cost_markup: 2,
+        voice_duration_cap: 30,
+        unsupported_format_audio_url: 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/unsupported_warning.ogg'
     });
 
     // Pincode variables
@@ -66,7 +71,12 @@ export default function SettingsPage() {
                 online_discount: Number(dbSettings.online_discount ?? 5),
                 rider_slot_limit: Number(dbSettings.rider_slot_limit ?? 10),
                 vacation_mode: dbSettings.vacation_mode || prev.vacation_mode,
-                payment_vpa: dbSettings.payment_vpa || prev.payment_vpa
+                payment_vpa: dbSettings.payment_vpa || prev.payment_vpa,
+                voice_rate_limit_hourly: Number(dbSettings.voice_rate_limit_hourly ?? 3),
+                voice_rate_limit_daily: Number(dbSettings.voice_rate_limit_daily ?? 10),
+                voice_cost_markup: Number(dbSettings.voice_cost_markup ?? 2),
+                voice_duration_cap: Number(dbSettings.voice_duration_cap ?? 30),
+                unsupported_format_audio_url: dbSettings.unsupported_format_audio_url || prev.unsupported_format_audio_url
             }));
 
             if (dbSettings.operating_hours) {
@@ -95,7 +105,12 @@ export default function SettingsPage() {
                 rider_slot_limit: settings.rider_slot_limit,
                 vacation_mode: settings.vacation_mode,
                 operating_hours: operatingHours,
-                payment_vpa: settings.payment_vpa
+                payment_vpa: settings.payment_vpa,
+                voice_rate_limit_hourly: settings.voice_rate_limit_hourly,
+                voice_rate_limit_daily: settings.voice_rate_limit_daily,
+                voice_cost_markup: settings.voice_cost_markup,
+                voice_duration_cap: settings.voice_duration_cap,
+                unsupported_format_audio_url: settings.unsupported_format_audio_url
             };
 
             await api.post('/settings', payload);
@@ -369,6 +384,61 @@ export default function SettingsPage() {
                                 )}
                             </div>
                         ))}
+                    </div>
+                </div>
+
+                {/* Voice Note & Spam Controls */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
+                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2 border-b pb-3">
+                        <Mic className="text-green-600" size={20} /> Voice Note & Spam Costing Controls
+                    </h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Hourly Voice Note Limit</label>
+                            <input
+                                type="number"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm"
+                                value={settings.voice_rate_limit_hourly}
+                                onChange={e => setSettings({ ...settings, voice_rate_limit_hourly: Number(e.target.value) })}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Daily Voice Note Limit</label>
+                            <input
+                                type="number"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm"
+                                value={settings.voice_rate_limit_daily}
+                                onChange={e => setSettings({ ...settings, voice_rate_limit_daily: Number(e.target.value) })}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Voice Cost Markup (%)</label>
+                            <input
+                                type="number"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm"
+                                value={settings.voice_cost_markup}
+                                onChange={e => setSettings({ ...settings, voice_cost_markup: Number(e.target.value) })}
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Voice Duration Cap (secs)</label>
+                            <input
+                                type="number"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm"
+                                value={settings.voice_duration_cap}
+                                onChange={e => setSettings({ ...settings, voice_duration_cap: Number(e.target.value) })}
+                            />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Unsupported Format Fallback Audio (URL)</label>
+                        <input
+                            type="text"
+                            className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm font-mono"
+                            value={settings.unsupported_format_audio_url}
+                            onChange={e => setSettings({ ...settings, unsupported_format_audio_url: e.target.value })}
+                        />
                     </div>
                 </div>
 
