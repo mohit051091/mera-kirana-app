@@ -104,3 +104,10 @@
   2. **Phase 2: Vernacular Language Bot:** Migrated database to support user preferred language columns, created dynamic switches (`ENGLISH`, `HINDI`, `MARATHI`) to store preferences, and translated all key messages, warnings, summaries, and buttons.
   3. **Phase 3: Subscription Management:** Created `subscriptions.js` backend private router, built Next.js subscriptions panel dashboard UI with calendar/quantity editor cards and status toggles, and added complete WhatsApp customer interactive schedule managers (Pause, Resume, Cancel, and Create new subscription).
   4. **17 E2E UAT Test Validations:** Extended tests to cover all localized checkout responses, voice, DND, and repeat order paths. All 17 E2E tests succeeded!
+
+## [2026-07-19] Hotfix: Catalog Order Webhook & Voice Greeting Tip
+- **Trigger:** User reported greeting loop during native WhatsApp catalog cart submissions and requested moving welcome tips to voice notes.
+- **Action:**
+  1. Intercepted `"order"` message type from native catalog cart submissions. Parsed selected variants and quantities, populated PostgreSQL cart table, and redirected directly to checkout buttons.
+  2. Split welcome greeting into two dispatches: (a) a spoken voice note dictating the order tips, and (b) a lightweight buttons message with clean navigation links.
+  3. Added welcome tip audio settings keys to Settings page configuration.
