@@ -25,7 +25,9 @@ export default function SettingsPage() {
         voice_rate_limit_daily: 10,
         voice_cost_markup: 2,
         voice_duration_cap: 30,
-        unsupported_format_audio_url: 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/unsupported_warning.ogg'
+        unsupported_format_audio_url: 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/unsupported_warning.ogg',
+        welcome_tip_new_audio_url: 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/welcome_tip.ogg',
+        welcome_tip_repeat_audio_url: 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/tip_repeat.ogg'
     });
 
     // Pincode variables
@@ -76,7 +78,9 @@ export default function SettingsPage() {
                 voice_rate_limit_daily: Number(dbSettings.voice_rate_limit_daily ?? 10),
                 voice_cost_markup: Number(dbSettings.voice_cost_markup ?? 2),
                 voice_duration_cap: Number(dbSettings.voice_duration_cap ?? 30),
-                unsupported_format_audio_url: dbSettings.unsupported_format_audio_url || prev.unsupported_format_audio_url
+                unsupported_format_audio_url: dbSettings.unsupported_format_audio_url || prev.unsupported_format_audio_url,
+                welcome_tip_new_audio_url: dbSettings.welcome_tip_new_audio_url || prev.welcome_tip_new_audio_url,
+                welcome_tip_repeat_audio_url: dbSettings.welcome_tip_repeat_audio_url || prev.welcome_tip_repeat_audio_url
             }));
 
             if (dbSettings.operating_hours) {
@@ -110,7 +114,9 @@ export default function SettingsPage() {
                 voice_rate_limit_daily: settings.voice_rate_limit_daily,
                 voice_cost_markup: settings.voice_cost_markup,
                 voice_duration_cap: settings.voice_duration_cap,
-                unsupported_format_audio_url: settings.unsupported_format_audio_url
+                unsupported_format_audio_url: settings.unsupported_format_audio_url,
+                welcome_tip_new_audio_url: settings.welcome_tip_new_audio_url,
+                welcome_tip_repeat_audio_url: settings.welcome_tip_repeat_audio_url
             };
 
             await api.post('/settings', payload);
@@ -438,6 +444,24 @@ export default function SettingsPage() {
                             className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm font-mono"
                             value={settings.unsupported_format_audio_url}
                             onChange={e => setSettings({ ...settings, unsupported_format_audio_url: e.target.value })}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Welcome Tip Audio for New Users (URL)</label>
+                        <input
+                            type="text"
+                            className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm font-mono"
+                            value={settings.welcome_tip_new_audio_url}
+                            onChange={e => setSettings({ ...settings, welcome_tip_new_audio_url: e.target.value })}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Welcome Tip Audio for Repeat Users (URL)</label>
+                        <input
+                            type="text"
+                            className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm font-mono"
+                            value={settings.welcome_tip_repeat_audio_url}
+                            onChange={e => setSettings({ ...settings, welcome_tip_repeat_audio_url: e.target.value })}
                         />
                     </div>
                 </div>

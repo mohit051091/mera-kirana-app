@@ -280,6 +280,8 @@ router.post('/whatsapp', async (req, res) => {
                 }
             } else if (type === 'audio') {
                 audioId = msg.audio ? msg.audio.id : null;
+            } else if (type === 'order') {
+                // Intercepted and handled below customer/cart session loaders
             } else {
                 // Unsupported message formats (location, image, sticker, document, contact)
                 console.log(`Unsupported message type "${type}" from ${from}, sending voice note and button fallbacks.`);
@@ -461,6 +463,89 @@ router.post('/whatsapp', async (req, res) => {
                         console.log(`Customer ${from} mapped to salesperson ${salesCheck.rows[0].name}`);
                     }
                 }
+            }
+
+            // 4.1 INTERCEPT AND PARSE WHATSAPP CATALOG ORDERS (CART)
+            if (type === 'order') {
+                // Load Cart
+                let cartRes = await db.query("SELECT cart_id, session_metadata FROM carts WHERE customer_id = $1 AND status = 'ACTIVE' LIMIT 1", [customerId]);
+                let cartId = null;
+                let metadata = {};
+
+                if (cartRes.rows.length > 0) {
+                    cartId = cartRes.rows[0].cart_id;
+                    metadata = cartRes.rows[0].session_metadata || {};
+                } else {
+                    const newCart = await db.query('INSERT INTO carts (customer_id) VALUES ($1) RETURNING cart_id', [customerId]);
+                    cartId = newCart.rows[0].cart_id;
+                }
+
+                const orderData = msg.order;
+                const productItems = orderData ? orderData.product_items : [];
+
+                if (productItems && productItems.length > 0) {
+                    // Clear existing cart items
+                    await db.query('DELETE FROM cart_items WHERE cart_id = $1', [cartId]);
+
+                    let addedCount = 0;
+                    for (const item of productItems) {
+                        const retailerId = item.product_retailer_id;
+                        const qty = item.quantity || 1;
+
+                        // Look up the variant_id matching meta_product_retailer_id
+                        const variantQuery = await db.query(
+                            'SELECT variant_id FROM product_variants WHERE meta_product_retailer_id = $1 AND is_active = true LIMIT 1',
+                            [retailerId]
+                        );
+
+                        if (variantQuery.rows.length > 0) {
+                            const variantId = variantQuery.rows[0].variant_id;
+                            await db.query(
+                                'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3)',
+                                [cartId, variantId, qty]
+                            );
+                            addedCount++;
+                        }
+                    }
+
+                    if (addedCount > 0) {
+                        // Reset stage to checkout ready
+                        metadata.stage = 'START';
+                        await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+
+                        const cartItemsQuery = await db.query(`
+                            SELECT ci.quantity, pv.price, pv.weight_label, p.base_name
+                            FROM cart_items ci
+                            JOIN product_variants pv ON ci.variant_id = pv.variant_id
+                            JOIN products p ON pv.product_id = p.product_id
+                            WHERE ci.cart_id = $1
+                            ORDER BY ci.cart_item_id ASC
+                        `, [cartId]);
+
+                        let total = 0, summaryText = "🛒 *Cart Updated from Catalog:*\n\n";
+                        cartItemsQuery.rows.forEach((row, i) => {
+                            const sub = row.price * row.quantity;
+                            total += sub;
+                            summaryText += `*${i + 1}.* ${row.base_name} (${row.weight_label}) x ${row.quantity} = *₹${sub}*\n`;
+                        });
+                        summaryText += `\n*Total: ₹${total.toFixed(2)}*`;
+                        summaryText += `\n\n💡 *To remove an item*, reply with *REMOVE* followed by the item number (e.g. *REMOVE 1*).`;
+
+                        const buttons = [
+                            { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                            { id: 'btn_clear_cart', title: userLang === 'HI' ? '🗑️ कार्ट साफ़ करें' : (userLang === 'MR' ? '🗑️ कार्ट साफ करा' : '🗑️ Clear Cart') },
+                            { id: 'btn_checkout', title: userLang === 'HI' ? '💳 चेकआउट' : (userLang === 'MR' ? '💳 चेकआउट' : '💳 Checkout') }
+                        ];
+
+                        await whatsappService.sendButtons(from, summaryText, buttons);
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                }
+
+                await whatsappService.sendText(from, "Sorry, I couldn't parse your catalog order. Please try again or browse products.");
+                await whatsappService.markAsRead(messageId);
+                return;
             }
 
             // 5. SESSION CHECK (CACHE FIRST)
@@ -858,11 +943,18 @@ Rules:
                 } else {
                     const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
                     const hasAddress = addrCheck.rows.length > 0;
-                    let tipText = "";
+                    
+                    let tipAudioUrl = "";
                     if (hasAddress) {
-                        tipText = TRANSLATIONS.TIP_REPEAT[userLang];
+                        tipAudioUrl = await getSetting('welcome_tip_repeat_audio_url', 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/tip_repeat.ogg');
                     } else {
-                        tipText = TRANSLATIONS.TIP_NEW[userLang];
+                        tipAudioUrl = await getSetting('welcome_tip_new_audio_url', 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/welcome_tip.ogg');
+                    }
+
+                    try {
+                        await whatsappService.sendAudio(from, tipAudioUrl);
+                    } catch (audioErr) {
+                        logError(audioErr, 'send_welcome_tip_audio_failed');
                     }
 
                     const buttons = [
@@ -872,10 +964,10 @@ Rules:
                     ];
                     
                     const welcomeMsg = userLang === 'EN' 
-                        ? `Welcome to *Mera Kirana*! 🏪\n\n${tipText}\n\nChoose an option to start:`
+                        ? `Welcome to *Mera Kirana*! 🏪\n\nChoose an option to start:`
                         : (userLang === 'HI' 
-                            ? `*मेरा किराना* में आपका स्वागत है! 🏪\n\n${tipText}\n\nशुरू करने के लिए एक विकल्प चुनें:` 
-                            : `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\n${tipText}\n\nसुरू करण्यासाठी एक पर्याय निवडा:`);
+                            ? `*मेरा किराना* में आपका स्वागत है! 🏪\n\nशुरू करने के लिए एक विकल्प चुनें:` 
+                            : `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\nसुरू करण्यासाठी एक पर्याय निवडा:`);
 
                     await whatsappService.sendButtons(from, welcomeMsg, buttons);
                 }
