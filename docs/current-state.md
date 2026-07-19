@@ -7,6 +7,7 @@
 - **Phase 1 (Sarvam speech STT):** Integrated Sarvam Saaras-Speech v3 API with fallbacks to Gemini, duration caps, de-duplication, rate limiting, settings dashboard controls, and `voice_cost_markup` percentage configuration.
 - **Phase 2 (Vernacular support):** Added language preferences column to database, created Hindi and Marathi command switch listeners (`HINDI`, `MARATHI`, `ENGLISH`), and translated bot templates (greetings, warnings, bills, buttons).
 - **Phase 3 (Subscriptions management):** Created `subscriptions.js` Express sub-router and registered it to verifyAdminAuth, developed Next.js dashboard subscriptions manager UI with calendar dates/quantity edits and status updates, and added WhatsApp schedule controls (Pause, Resume, Cancel, Create new subscription wizards).
+- **Database Performance Optimization:** Added indexes to the `subscriptions` table on `customer_id` and composite `(status, created_at)` columns to prevent table scans as subscriber volumes scale.
 - **Production Server:** Node.js Express server running in test/production configurations, connected to Supabase PostgreSQL.
 - **Production Security:** Fully replaced plain auth headers with bcrypt-password hashing, JWT authentication endpoints, and JWT Bearer token authorization middleware. Next.js dashboard stores JWT in cookies and intercepts Axios headers.
 - **Dynamic KPIs:** Home dashboard is wired up with live database aggregators summing revenue, AOV, conversion rate, and active referrals.
