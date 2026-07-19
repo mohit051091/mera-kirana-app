@@ -631,6 +631,122 @@ async function runTests() {
             }
         }
 
+        // --- TEST 16: Conversational Cart Item Removals ---
+        console.log('\n--- UAT Test 16: Conversational Cart Item Removals ---');
+        // Add a variant curd item to cart first
+        const curdVariantRes = await pool.query("SELECT variant_id FROM product_variants pv JOIN products p ON pv.product_id = p.product_id WHERE p.base_name = 'Curd' LIMIT 1");
+        const curdVariantId = curdVariantRes.rows[0].variant_id;
+        
+        const tempCartRes = await pool.query("SELECT cart_id FROM carts WHERE customer_id = $1 AND status = 'ACTIVE' LIMIT 1", [customerId]);
+        const testCartId = tempCartRes.rows[0].cart_id;
+        await pool.query("INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, 1) ON CONFLICT DO NOTHING", [testCartId, curdVariantId]);
+
+        // Send REMOVE 1 command
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_016_remove',
+                            type: 'text',
+                            text: { body: 'REMOVE 1' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        // Verify cart is empty
+        const postRemoveCartItems = await pool.query("SELECT * FROM cart_items WHERE cart_id = $1", [testCartId]);
+        if (postRemoveCartItems.rows.length === 0) {
+            console.log('✅ UAT Test 16 Passed: Curd item removed and cart cleared successfully!');
+        } else {
+            console.log('❌ UAT Test 16 Failed: Item was not removed from cart.');
+        }
+
+        // --- TEST 17: Human Handoff & Bot Pauses ---
+        console.log('\n--- UAT Test 17: Human Handoff & Bot Pause/Resume Toggles ---');
+        // Send TALK TO OWNER command
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_017_handoff',
+                            type: 'text',
+                            text: { body: 'TALK TO OWNER' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        const checkHandoffMeta = await pool.query("SELECT session_metadata FROM carts WHERE cart_id = $1", [testCartId]);
+        const handoffStage = checkHandoffMeta.rows[0].session_metadata?.stage;
+        if (handoffStage === 'HUMAN_HANDOFF') {
+            console.log("✅ UAT Test 17a Passed: Human Handoff stage set to 'HUMAN_HANDOFF'.");
+        } else {
+            console.log("❌ UAT Test 17a Failed: Stage was not updated to HUMAN_HANDOFF.");
+        }
+
+        // Send a random message, which should be ignored (no stage change)
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_017_ignore',
+                            type: 'text',
+                            text: { body: 'I want milk' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+        
+        const checkIgnoredMeta = await pool.query("SELECT session_metadata FROM carts WHERE cart_id = $1", [testCartId]);
+        const ignoredStage = checkIgnoredMeta.rows[0].session_metadata?.stage;
+        if (ignoredStage === 'HUMAN_HANDOFF') {
+            console.log("✅ UAT Test 17b Passed: Bot correctly ignored message during active handoff.");
+        } else {
+            console.log("❌ UAT Test 17b Failed: Message processed and changed stages.");
+        }
+
+        // Send START command to resume automation
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_017_resume',
+                            type: 'text',
+                            text: { body: 'START' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        const checkResumeMeta = await pool.query("SELECT session_metadata FROM carts WHERE cart_id = $1", [testCartId]);
+        const resumedStage = checkResumeMeta.rows[0].session_metadata?.stage;
+        if (resumedStage === 'START') {
+            console.log("✅ UAT Test 17c Passed: Automation resumed and stage reset to 'START'.");
+        } else {
+            console.log("❌ UAT Test 17c Failed: Handoff could not be resumed via START.");
+        }
+
         // Clean up mock data entries at the end of run
         await pool.query("DELETE FROM cart_items WHERE cart_id = $1", [mockCartId]);
         await pool.query("DELETE FROM carts WHERE customer_id = $1", [mockCustId]);

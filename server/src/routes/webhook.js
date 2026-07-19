@@ -3,6 +3,7 @@ const router = express.Router();
 const whatsappService = require('../services/whatsapp');
 const db = require('../database/db');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { logError } = require('../services/logger');
 
 // RAM Cache for active users to skip DB lookups for 24 hours.
 const sessionCache = new Map();
@@ -15,7 +16,7 @@ async function getSetting(key, defaultValue) {
         const res = await db.query('SELECT value FROM system_settings WHERE key = $1', [key]);
         return res.rows.length ? res.rows[0].value : defaultValue;
     } catch (e) {
-        console.error(`Error loading setting ${key}:`, e);
+        logError(e, `getSetting_${key}`);
         return defaultValue;
     }
 }
@@ -28,7 +29,7 @@ async function logDropoff(customerId, stage, reason, notes = '') {
             [customerId, stage, reason, notes]
         );
     } catch (e) {
-        console.error('Error logging dropoff:', e);
+        logError(e, 'logDropoff');
     }
 }
 
@@ -204,6 +205,33 @@ router.post('/whatsapp', async (req, res) => {
             customerId = upsertCust.rows[0].customer_id;
             dndActive = upsertCust.rows[0].dnd_active;
 
+            // Human handoff stage check
+            const cartResTemp = await db.query("SELECT cart_id, session_metadata FROM carts WHERE customer_id = $1 AND status = 'ACTIVE' LIMIT 1", [customerId]);
+            let isHandoff = false;
+            let cartIdTemp = null;
+            let metadataTemp = {};
+            if (cartResTemp.rows.length > 0) {
+                cartIdTemp = cartResTemp.rows[0].cart_id;
+                metadataTemp = cartResTemp.rows[0].session_metadata || {};
+                if (metadataTemp.stage === 'HUMAN_HANDOFF') {
+                    isHandoff = true;
+                }
+            }
+
+            if (isHandoff) {
+                if (type === 'text' && text && text.trim().toUpperCase() === 'START') {
+                    metadataTemp.stage = 'START';
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadataTemp, cartIdTemp]);
+                    await whatsappService.sendText(from, "🤖 *Automation Resumed!* You can now browse our catalog or send a voice note.");
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                } else {
+                    console.log(`User ${from} is in HUMAN_HANDOFF. Ignoring bot response.`);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+            }
+
             // Trigger stop command if button clicked or text is 'STOP'
             const isStopCmd = (type === 'text' && text.trim().toUpperCase() === 'STOP') || 
                               (interactive && interactive.button_reply && interactive.button_reply.id === 'btn_dnd_stop');
@@ -218,6 +246,26 @@ router.post('/whatsapp', async (req, res) => {
                 await db.query('UPDATE customers SET dnd_active = false WHERE customer_id = $1', [customerId]);
                 dndActive = false;
                 await whatsappService.sendText(from, "🔔 *Opt-in Confirmed!* You will now receive order updates and messages.");
+            }
+
+            // Human handoff text command trigger
+            if (type === 'text' && text && (text.trim().toUpperCase() === 'TALK TO OWNER' || text.trim().toUpperCase() === 'TALK TO AGENT' || text.trim().toUpperCase() === 'SUPPORT')) {
+                let tempCart = await db.query("SELECT cart_id, session_metadata FROM carts WHERE customer_id = $1 AND status = 'ACTIVE' LIMIT 1", [customerId]);
+                let tempCartId = null;
+                let tempMetadata = {};
+                if (tempCart.rows.length > 0) {
+                    tempCartId = tempCart.rows[0].cart_id;
+                    tempMetadata = tempCart.rows[0].session_metadata || {};
+                } else {
+                    const newCart = await db.query('INSERT INTO carts (customer_id) VALUES ($1) RETURNING cart_id', [customerId]);
+                    tempCartId = newCart.rows[0].cart_id;
+                }
+                
+                tempMetadata.stage = 'HUMAN_HANDOFF';
+                await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [tempMetadata, tempCartId]);
+                await whatsappService.sendText(from, "🤝 *Human Handoff Active*\n\nI have paused automatic replies and alerted the store owner. An agent will reply to you directly here shortly.\n\n*To resume automatic bot ordering at any time, just type START.*");
+                await whatsappService.markAsRead(messageId);
+                return;
             }
 
             // 3. CHECK VACATION MODE (Shop closed)
@@ -325,7 +373,7 @@ Rules:
                     console.log('Gemini voice extraction results:', voiceParsed);
 
                 } catch (err) {
-                    console.error('Gemini processing failed:', err);
+                    logError(err, 'Gemini_voice_parse');
                     await whatsappService.sendText(from, "Sorry, I couldn't catch that. Could you please specify your dairy order?");
                     await whatsappService.markAsRead(messageId);
                     return;
@@ -619,13 +667,20 @@ Rules:
                     return;
                 } else if (buttonId === 'btn_support') {
                     const buttons = [
-                        { id: 'btn_products', title: '🛍️ Browse Products' }
+                        { id: 'btn_products', title: '🛍️ Browse Products' },
+                        { id: 'btn_talk_to_owner', title: '🤝 Talk to Owner' }
                     ];
                     await whatsappService.sendButtons(
                         from, 
-                        "📞 *Call Support:*\n\nYou can reach our store manager directly at *+91 98765 43210* for any order queries or delivery assistance. We are open from 6:00 AM to 9:00 PM!",
+                        "📞 *Call Support:*\n\nYou can reach our store manager directly at *+91 98765 43210* for any order queries or delivery assistance. We are open from 6:00 AM to 9:00 PM!\n\nOr click below to speak to an agent directly in this chat:",
                         buttons
                     );
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                } else if (buttonId === 'btn_talk_to_owner') {
+                    metadata.stage = 'HUMAN_HANDOFF';
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    await whatsappService.sendText(from, "🤝 *Human Handoff Active*\n\nI have paused automatic replies and alerted the store owner. An agent will reply to you directly here shortly.\n\n*To resume automatic bot ordering at any time, just type START.*");
                     await whatsappService.markAsRead(messageId);
                     return;
                 } else if (buttonId === 'btn_products') {
@@ -650,13 +705,18 @@ Rules:
                         await whatsappService.sendText(from, "Your cart is empty! 🛒");
                     } else {
                         let total = 0, summaryText = "🛒 *Your Cart:*\n\n";
-                        cartSummary.rows.forEach(row => {
+                        cartSummary.rows.forEach((row, i) => {
                             const sub = row.price * row.quantity;
                             total += sub;
-                            summaryText += `• ${row.base_name} (${row.weight_label}) x ${row.quantity} = *₹${sub}*\n`;
+                            summaryText += `*${i + 1}.* ${row.base_name} (${row.weight_label}) x ${row.quantity} = *₹${sub}*\n`;
                         });
                         summaryText += `\n*Total: ₹${total.toFixed(2)}*`;
-                        const buttons = [{ id: 'btn_products', title: '🛍️ Add More' }, { id: 'btn_view_cart', title: '🛒 Cart' }, { id: 'btn_checkout', title: '💳 Checkout' }];
+                        summaryText += `\n\n💡 *To remove an item*, reply with *REMOVE* followed by the item number (e.g. *REMOVE 1*).`;
+                        const buttons = [
+                            { id: 'btn_products', title: '🛍️ Add More' },
+                            { id: 'btn_clear_cart', title: '🗑️ Clear Cart' },
+                            { id: 'btn_checkout', title: '💳 Checkout' }
+                        ];
                         await whatsappService.sendButtons(from, summaryText, buttons);
                     }
                 } else if (buttonId === 'btn_checkout' || buttonId === 'btn_resume_checkout') {
@@ -987,7 +1047,7 @@ Rules:
                                         qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${qrText}`;
                                     }
                                 } catch (rzpErr) {
-                                    console.error('Failed to create Razorpay payment link:', rzpErr.response?.data || rzpErr.message);
+                                    logError(rzpErr, 'Razorpay_link_generation');
                                 }
                             }
                             
@@ -998,7 +1058,7 @@ Rules:
 
                     } catch (error) {
                         await client.query('ROLLBACK');
-                        console.error('Order transaction failed:', error);
+                        logError(error, 'Order_transaction');
                         await whatsappService.sendText(from, "Something went wrong placing your order. Please try again.");
                     } finally {
                         client.release();
@@ -1096,6 +1156,60 @@ Rules:
                     { id: 'btn_addr_select_' + newAddr.rows[0].address_id, title: '🚚 Process Delivery Slot' }
                 ];
                 await whatsappService.sendButtons(from, "✅ *Address Saved!* Tap button below to choose delivery slot:", buttons);
+                await whatsappService.markAsRead(messageId);
+                return;
+            }
+
+            // Conversational Cart Item Removals handler
+            const removeMatch = type === 'text' && text && text.trim().match(/^remove\s+(\d+)$/i);
+            if (removeMatch) {
+                const itemIndex = parseInt(removeMatch[1]) - 1; // 0-indexed
+                
+                const cartSummary = await db.query(`
+                    SELECT ci.cart_item_id, p.base_name, pv.weight_label
+                    FROM cart_items ci
+                    JOIN product_variants pv ON ci.variant_id = pv.variant_id
+                    JOIN products p ON pv.product_id = p.product_id
+                    WHERE ci.cart_id = $1
+                    ORDER BY ci.cart_item_id ASC
+                `, [cartId]);
+                
+                if (itemIndex >= 0 && itemIndex < cartSummary.rows.length) {
+                    const targetItem = cartSummary.rows[itemIndex];
+                    await db.query('DELETE FROM cart_items WHERE cart_item_id = $1', [targetItem.cart_item_id]);
+                    await whatsappService.sendText(from, `🗑️ *Removed:* ${targetItem.base_name} (${targetItem.weight_label}) has been removed from your cart.`);
+                    
+                    // Display updated cart
+                    const updatedCart = await db.query(`
+                        SELECT ci.quantity, pv.price, pv.weight_label, p.base_name
+                        FROM cart_items ci
+                        JOIN product_variants pv ON ci.variant_id = pv.variant_id
+                        JOIN products p ON pv.product_id = p.product_id
+                        WHERE ci.cart_id = $1
+                        ORDER BY ci.cart_item_id ASC
+                    `, [cartId]);
+                    
+                    if (updatedCart.rows.length === 0) {
+                        await whatsappService.sendText(from, "Your cart is now empty! 🛒");
+                    } else {
+                        let total = 0, summaryText = "🛒 *Updated Cart:*\n\n";
+                        updatedCart.rows.forEach((row, i) => {
+                            const sub = row.price * row.quantity;
+                            total += sub;
+                            summaryText += `*${i + 1}.* ${row.base_name} (${row.weight_label}) x ${row.quantity} = *₹${sub}*\n`;
+                        });
+                        summaryText += `\n*Total: ₹${total.toFixed(2)}*`;
+                        summaryText += `\n\n💡 *To remove an item*, reply with *REMOVE* followed by the item number (e.g. *REMOVE 1*).`;
+                        const buttons = [
+                            { id: 'btn_products', title: '🛍️ Add More' },
+                            { id: 'btn_clear_cart', title: '🗑️ Clear Cart' },
+                            { id: 'btn_checkout', title: '💳 Checkout' }
+                        ];
+                        await whatsappService.sendButtons(from, summaryText, buttons);
+                    }
+                } else {
+                    await whatsappService.sendText(from, "⚠️ Invalid item number. Please view your cart first to see the correct numbers.");
+                }
                 await whatsappService.markAsRead(messageId);
                 return;
             }
@@ -1211,7 +1325,7 @@ Rules:
             }
 
         } catch (error) {
-            console.error('Error processing message:', error);
+            logError(error, 'webhook_message_processing');
         } finally {
             activeUserLocks.delete(from);
         }
