@@ -1,8 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../database/db');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'merakirana_jwt_secret_2026_super_secure';
 
 // Placeholder route imports
+const authRoutes = require('./auth');
+const crmRoutes = require('./crm');
 const productsRoutes = require('./products');
 const ordersRoutes = require('./orders');
 const partnersRoutes = require('./partners');
@@ -23,7 +28,8 @@ router.get('/health', async (req, res) => {
     }
 });
 
-// 1. Mount Public Webhooks (signatures/verify tokens handled internally)
+// 1. Mount Public Webhooks (signatures/verify tokens handled internally) and Auth
+router.use('/auth', authRoutes);
 router.use('/webhook', webhookRoutes);
 router.use('/webhook/payments', paymentsRoutes);
 
@@ -33,18 +39,25 @@ const verifyAdminAuth = (req, res, next) => {
     if (process.env.NODE_ENV === 'test') {
         return next();
     }
-    const adminKey = req.headers['x-admin-password'];
-    const expectedKey = process.env.ADMIN_PASSWORD || 'merakirana2026';
-    
-    if (adminKey !== expectedKey) {
-        return res.status(401).json({ error: 'Unauthorized: Invalid administrative credentials.' });
+    const authHeader = req.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized: Missing administrative authorization token.' });
     }
-    next();
+    
+    const token = authHeader.split(' ')[1];
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.admin = decoded;
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid or expired administrative session.' });
+    }
 };
 
 router.use(verifyAdminAuth);
 
 // 3. Mount Private Dashboard APIs (require auth headers)
+router.use('/crm', crmRoutes);
 router.use('/products', productsRoutes);
 router.use('/orders', ordersRoutes);
 router.use('/partners', partnersRoutes);

@@ -2,10 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../database/db');
 
-// GET /api/partners - List all partners
+// GET /api/partners - List all active partners
 router.get('/', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM delivery_partners ORDER BY name ASC');
+        const result = await pool.query('SELECT * FROM delivery_partners WHERE is_active = TRUE ORDER BY name ASC');
         res.json(result.rows);
     } catch (err) {
         console.error(err);
@@ -169,7 +169,6 @@ router.post('/route-optimize', async (req, res) => {
             }
         }
 
-        // Fallback: return default unsorted orders if OSRM fails or coordinates are missing
         res.json({
             optimized: false,
             route: orders.map(o => ({
@@ -183,6 +182,37 @@ router.post('/route-optimize', async (req, res) => {
     } catch (err) {
         console.error('Route optimization error:', err);
         res.status(500).json({ error: 'Failed to optimize route' });
+    }
+});
+
+// PUT /api/partners/:id - Update partner registration details
+router.put('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, phone, pin, max_concurrent_orders } = req.body;
+        
+        await pool.query(
+            `UPDATE delivery_partners 
+             SET name = $1, phone = $2, pin = COALESCE($3, pin), max_concurrent_orders = $4 
+             WHERE partner_id = $5`,
+            [name, phone, pin || null, max_concurrent_orders || 5, id]
+        );
+        res.json({ message: 'Delivery partner details updated successfully' });
+    } catch (err) {
+        console.error('Update Partner Error:', err);
+        res.status(500).json({ error: 'Failed to update partner details' });
+    }
+});
+
+// DELETE /api/partners/:id - Soft-deactivate delivery partner (set is_active = FALSE)
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query('UPDATE delivery_partners SET is_active = FALSE, current_status = \'OFFLINE\' WHERE partner_id = $1', [id]);
+        res.json({ message: 'Delivery partner deactivated successfully' });
+    } catch (err) {
+        console.error('Deactivate Partner Error:', err);
+        res.status(500).json({ error: 'Failed to deactivate delivery partner' });
     }
 });
 

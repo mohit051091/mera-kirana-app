@@ -14,7 +14,7 @@ export function middleware(request) {
     }
 
     // Redirect unauthenticated requests to login page
-    if (!authCookie || authCookie.value !== 'true') {
+    if (!authCookie || !authCookie.value || authCookie.value === 'true' || authCookie.value.split('.').length !== 3) {
         const loginUrl = new URL('/login', request.url);
         return NextResponse.redirect(loginUrl);
     }

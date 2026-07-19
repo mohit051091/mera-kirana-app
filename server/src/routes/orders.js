@@ -67,10 +67,33 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/orders - List all orders (Recent first)
+// GET /api/orders - List all orders (Recent first, supports date filter)
 router.get('/', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
+    // Auto-expire PENDING_PAYMENT orders older than 30 minutes
+    await pool.query(`
+      UPDATE orders 
+      SET status = 'CANCELLED', updated_at = NOW() 
+      WHERE status = 'PENDING_PAYMENT' AND created_at < NOW() - INTERVAL '30 minutes'
+    `);
+
+    const { startDate, endDate } = req.query;
+    let query = 'SELECT * FROM orders';
+    const params = [];
+    
+    if (startDate && endDate) {
+      query += ' WHERE created_at >= $1 AND created_at <= $2';
+      params.push(startDate, endDate);
+    } else if (startDate) {
+      query += ' WHERE created_at >= $1';
+      params.push(startDate);
+    } else if (endDate) {
+      query += ' WHERE created_at <= $1';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY created_at DESC LIMIT 100';
+    const result = await pool.query(query, params);
     res.json(result.rows);
   } catch (err) {
     console.error(err);
@@ -254,6 +277,40 @@ router.get('/qr/:id.png', async (req, res) => {
   } catch (e) {
     console.error('Error generating QR image:', e);
     res.status(500).send('Internal Server Error');
+  }
+});
+
+// PUT /api/orders/:id/cancel - Cancel order
+router.put('/:id/cancel', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { id } = req.params;
+    const { changed_by } = req.body;
+    
+    const oldOrderRes = await client.query('SELECT status FROM orders WHERE order_id = $1', [id]);
+    if (oldOrderRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    const oldStatus = oldOrderRes.rows[0].status;
+    
+    await client.query("UPDATE orders SET status = 'CANCELLED', updated_at = NOW() WHERE order_id = $1", [id]);
+    
+    await client.query(
+      `INSERT INTO order_status_logs (order_id, old_status, new_status, changed_by)
+       VALUES ($1, $2, 'CANCELLED', $3)`,
+      [id, oldStatus, changed_by || 'Admin']
+    );
+    
+    await client.query('COMMIT');
+    res.json({ message: 'Order cancelled successfully' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Cancel Order Error:', err);
+    res.status(500).json({ error: 'Failed to cancel order' });
+  } finally {
+    client.release();
   }
 });
 

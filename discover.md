@@ -161,8 +161,24 @@ the generic checklist alone — don't force-fit a domain that isn't there.
   and what does it hand off to other roles?
 - **Memory strategy** — what must persist across sessions, and where it lives
 - **Tools & external access** — APIs, file system, network, credentials needed
-- **Verification / evaluation** — how would a human check the output is correct?
-  What automated checks (tests, linters, critics) can approximate that?
+- **Verification / evaluation** — how would a human check the output is
+  correct? For any codebase, do not accept a vague answer — require an
+  explicit list of test categories that will actually be covered: happy
+  path, negative/invalid input, edge/boundary cases, concurrent/simultaneous
+  usage (race conditions), and failure of any external dependency (payment
+  gateway, third-party API, network timeout). A plan that only covers happy
+  path is incomplete — say so and ask what's covering the rest before moving
+  on. Write the resulting list to `harness/test-plan.md` in Phase 3.
+- **Production hardening baseline** — will real users, real payments, or
+  real data touch this, even at small scale? If yes (this is the common
+  case — it is not limited to finance/healthcare/critical-infra domains),
+  confirm a plan exists for: error handling and retries on external calls,
+  idempotency on anything that processes payments or webhooks, resource
+  cleanup (DB connections/locks released even on error paths, not just the
+  success path), basic rate limiting, and a way to find out when something
+  breaks in production (even just error logging to a file is better than
+  nothing). If the answer is "this is a disposable prototype, never exposed
+  to real traffic," record that explicitly as the reason to skip this.
 - **Failure handling** — what happens when an agent gets stuck or produces a
   bad result? What must be reviewed before anything ships?
 - **Guardrails** — what must never happen automatically (e.g. "never push to
@@ -256,6 +272,12 @@ yourself, in this same session, without waiting for the user to say "go":
    - `harness/roadmap.md` — milestones, implementation order, and which
      pieces of work can run in parallel vs. must be sequential. Only write
      this if the project has enough distinct stages for it to be useful.
+   - `harness/test-plan.md` — for any project with a codebase: the explicit
+     test category list from the Verification checklist item (happy path,
+     negative/invalid input, edge/boundary, concurrency/race conditions,
+     external dependency failure), with concrete scenarios under each
+     category specific to this project's actual features. Not optional for
+     codebase projects — a plan covering only happy path is incomplete.
 
 5. **Write the `/docs` continuity system** — this is separate from `harness/`
    and built for every project regardless of size, because its job is
@@ -274,7 +296,30 @@ yourself, in this same session, without waiting for the user to say "go":
      meaningful change: what happened, why, which agent/model did it.
    - `docs/decisions.md` — append-only decision log for choices made during
      *execution* (as opposed to `harness/decision-log.md`, which covers
-     choices made during discovery).
+     choices made during discovery). Each entry must include: Date, Decision,
+     Reason, Alternatives Considered, Tradeoffs, and Outcome — not just "what
+     we chose," since the alternatives and outcome are what make this useful
+     later, not the decision alone.
+   - `docs/tasks.md` — a live task registry, not just the current-state
+     snapshot: Backlog, Planned, In Progress, Testing/Review, Done, Cancelled.
+     Update task status as work moves, so a new LLM sees the full queue, not
+     just what's active right now.
+   - `docs/incidents.md` — for any project with a codebase: a registry of
+     actual bugs and production incidents, distinct from the general friction
+     log in `harness/execution-notes.md`. Each entry: Date, Symptoms, Root
+     Cause, Fix, Preventive Action. This exists so a real bug gets recorded
+     once and doesn't quietly recur because nobody wrote down why it happened.
+   - `docs/rejected-approaches.md` — approaches that were tried and abandoned,
+     with why they failed. Cheap to maintain, and it exists specifically so a
+     future LLM with no memory of your history doesn't re-propose something
+     you already ruled out.
+   - `docs/deployments.md` — only if this project actually deploys somewhere:
+     Date, Version, Changes, Risk level, Rollback plan, Result. Skip entirely
+     for projects with no discrete deployment step (e.g. a one-off script).
+   - `docs/performance-log.md` — only if performance was flagged as a real
+     priority during discovery: Problem, Baseline, Hypothesis, Change tried,
+     Result, Accept/reject decision. Skip if performance was never a stated
+     concern — don't manufacture entries to fill the file.
 
 6. **Write `harness/manifest.json`** — a machine-readable index, e.g.:
    ```json
@@ -297,10 +342,11 @@ yourself, in this same session, without waiting for the user to say "go":
      describing the whole venture, not just its technical component
    - An explicit instruction at the top: *"Before doing any work, read
      docs/current-state.md first — it's the fastest way to know exactly
-     where this project stands. Then read harness/spec.md in full. Then
-     find your role in the list below and read your own brief — you do not
-     need to read every other role's brief, only your own and this shared
-     section."*
+     where this project stands. Then skim docs/tasks.md so you know what's
+     queued, not just what's active. Then read harness/spec.md in full.
+     Then find your role in the list below and read your own brief — you do
+     not need to read every other role's brief, only your own and this
+     shared section."*
    - **A routing list, one line per role identified during discovery**, e.g.:
      `"If you are the developer/coding agent, read harness/roles/developer/BRIEF.md."`
      `"If you are the marketing/GTM agent, read harness/roles/marketing/BRIEF.md."`
@@ -311,6 +357,25 @@ yourself, in this same session, without waiting for the user to say "go":
    - The guardrails list, copied directly from the spec (never rely on the
      execution agent to go find them — put them in AGENTS.md directly too),
      since guardrails apply across all roles, not just the technical one
+   - **Two standing guardrails, always included for any project with a
+     codebase, regardless of what the spec says** — these are non-negotiable
+     defaults, not optional checklist answers, because a guardrail phrased as
+     a question gets skipped under time pressure while one phrased as a
+     standing rule doesn't:
+     1. *"Never implement authentication that can be bypassed purely
+        client-side (e.g. a flag checked only in browser JS or a cookie set
+        without server verification) for anything touching real user data,
+        payments, or admin access. Enforce auth server-side on every
+        protected endpoint. This applies unless the user has explicitly
+        confirmed this is a disposable prototype that will never be exposed
+        to real traffic."*
+     2. *"Definition of Done: a feature is only complete when it is wired
+        end-to-end and actually exercised by the running application. A
+        database table, column, or UI element that exists but is never
+        read, written, or invoked by real application code is NOT a
+        completed feature — do not report it as done in
+        docs/progress-log.md or docs/current-state.md just because it
+        exists in the schema or interface."*
    - An instruction to keep `/docs` current, incrementally, not just at the
      end: *"After completing any meaningful subtask — not only at the end of
      a session — update docs/current-state.md to reflect what's actually
@@ -326,6 +391,17 @@ yourself, in this same session, without waiting for the user to say "go":
      harness/execution-notes.md (create it if absent) — one line, what
      happened, why. This costs you almost nothing and makes future harnesses
      better."*
+   - Trigger-based instructions for the registry files, so they get updated
+     when the relevant event happens rather than never: *"Update
+     docs/tasks.md whenever a task's status actually changes — not just at
+     session end. When you fix a real bug (not a typo, an actual defect that
+     caused wrong behavior), record it in docs/incidents.md with symptoms,
+     root cause, fix, and how to prevent recurrence. When you try an
+     approach and abandon it, record it in docs/rejected-approaches.md with
+     why — this stops a future session from re-proposing it. If this project
+     deploys anywhere, log every deployment in docs/deployments.md before or
+     immediately after it happens. If performance work happens, log it in
+     docs/performance-log.md with baseline and result, not just the change."*
    - Where the data or other project assets live, if applicable
 
    Role-specific detail — coding standards, git commit practices, ad
@@ -335,7 +411,23 @@ yourself, in this same session, without waiting for the user to say "go":
    descriptive git commits as you go, one logical change per commit, and
    reference the matching docs/progress-log.md entry in the commit message"*
    belongs in the developer role's brief specifically — only write it if a
-   developer/coding role exists in this project, not by default.
+   developer/coding role exists in this project, not by default. Likewise,
+   if this project's domain follow-up surfaced a need for a code-graph tool,
+   the developer brief — not AGENTS.md — should state the concrete workflow.
+   **Current default preference (revisit this periodically — this tool
+   category moves fast and this line should be updated, not treated as
+   permanent): default to CodeGraph as the primary, always-on tool for
+   structural/dependency queries during execution, since it auto-syncs on
+   file changes and integrates natively with Antigravity and OpenCode. Only
+   bring in Graphify supplementally — run it on-demand, not continuously —
+   when the project specifically benefits from its human-readable
+   `GRAPH_REPORT.md` output or from linking non-code material (docs, PDFs)
+   into the same graph. Do not run both tools for the same query; that
+   doubles token spend instead of saving it.** The workflow itself: check
+   the chosen tool(s) are installed at session start and install if missing,
+   read the graph/report output before editing unfamiliar code to save
+   tokens on exploration, and trigger a resync after changes if a given tool
+   doesn't already auto-sync.
 
 ## Phase 4 — Internal Validation (automatic, silent to the user)
 
@@ -350,6 +442,14 @@ Before telling the user you're done, check your own output:
 - Is `AGENTS.md` free of role-specific detail that should live in a brief
   instead (e.g. it should not contain coding-only instructions if the
   project also has non-technical roles)?
+- If this project has a codebase, does `harness/test-plan.md` exist and
+  cover more than just the happy path?
+- Are the two standing guardrails (client-side-auth ban, Definition of Done)
+  present in `AGENTS.md` word-for-word, not paraphrased away or dropped?
+- Do `docs/tasks.md`, `docs/incidents.md`, and `docs/rejected-approaches.md`
+  exist (they're near-universal), and do `docs/deployments.md` /
+  `docs/performance-log.md` exist only where actually relevant, not as
+  empty placeholders for projects that don't need them?
 
 Fix anything wrong silently before proceeding — don't hand the user a broken
 harness and ask them to catch it.

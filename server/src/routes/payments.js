@@ -80,7 +80,11 @@ router.post('/', async (req, res) => {
                 const custRes = await pool.query('SELECT phone FROM customers WHERE customer_id = $1', [dbOrder.customer_id]);
                 if (custRes.rows.length > 0) {
                     const phone = custRes.rows[0].phone;
-                    await whatsappService.sendText(phone, `🎉 *Online Payment Confirmed!* We have received your payment of *₹${amount.toFixed(2)}* for *Order #${dbOrder.readable_order_id}*. Your order is now confirmed and scheduled for delivery!`);
+                    try {
+                        await whatsappService.sendText(phone, `🎉 *Online Payment Confirmed!* We have received your payment of *₹${amount.toFixed(2)}* for *Order #${dbOrder.readable_order_id}*. Your order is now confirmed and scheduled for delivery!`);
+                    } catch (whatsappErr) {
+                        console.warn('⚠️ WhatsApp payment notification failed to send:', whatsappErr.message);
+                    }
                 }
             } else {
                 console.log(`⚠️ Order ${orderId} status was not updated (might already be confirmed).`);

@@ -2,24 +2,28 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Lock, ShieldAlert, Key } from 'lucide-react';
+import api from '../../lib/api';
 
 export default function LoginPage() {
     const [password, setPassword] = useState('');
     const [error, setError] = useState(false);
     const router = useRouter();
 
-    const handleLogin = (e) => {
+    const handleLogin = async (e) => {
         e.preventDefault();
-        
-        // Define admin panel access password matching WhatsApp store configurations
-        if (password === 'merakirana2026' || password === 'merakirana123') {
-            // Set cookies for 7 days
-            document.cookie = "admin_auth=true; path=/; max-age=604800; SameSite=Strict";
-            document.cookie = `admin_access_key=${password}; path=/; max-age=604800; SameSite=Strict`;
-            router.push('/');
-            router.refresh();
-        } else {
+        try {
+            const res = await api.post('/auth/login', { password });
+            if (res.data && res.data.token) {
+                // Set cookies for 7 days with the JWT token
+                document.cookie = `admin_auth=${res.data.token}; path=/; max-age=604800; SameSite=Strict`;
+                router.push('/');
+                router.refresh();
+            } else {
+                throw new Error("Missing token");
+            }
+        } catch (err) {
             setError(true);
+            setPassword('');
             setTimeout(() => setError(false), 3000);
         }
     };

@@ -84,4 +84,43 @@ router.get('/chats/:convId', async (req, res) => {
     }
 });
 
+// GET /api/analytics/kpis - Get real-time dashboard counts
+router.get('/kpis', async (req, res) => {
+    try {
+        const todayOrdersQuery = await pool.query(`
+            SELECT COUNT(*) as count 
+            FROM orders 
+            WHERE created_at >= CURRENT_DATE
+        `);
+        
+        const pendingDeliveryQuery = await pool.query(`
+            SELECT COUNT(*) as count 
+            FROM orders 
+            WHERE status IN ('CONFIRMED', 'PREPARING', 'DELIVERING', 'OUT_FOR_DELIVERY')
+        `);
+        
+        const todayRevenueQuery = await pool.query(`
+            SELECT COALESCE(SUM(total_amount), 0) as revenue 
+            FROM orders 
+            WHERE created_at >= CURRENT_DATE AND status != 'CANCELLED'
+        `);
+        
+        const activePartnersQuery = await pool.query(`
+            SELECT COUNT(*) as count 
+            FROM delivery_partners 
+            WHERE current_status = 'AVAILABLE'
+        `);
+        
+        res.json({
+            todayOrders: parseInt(todayOrdersQuery.rows[0].count),
+            pendingDelivery: parseInt(pendingDeliveryQuery.rows[0].count),
+            todayRevenue: parseFloat(todayRevenueQuery.rows[0].revenue),
+            activePartners: parseInt(activePartnersQuery.rows[0].count)
+        });
+    } catch (err) {
+        console.error('KPIs Fetch Error:', err);
+        res.status(500).json({ error: 'Failed to fetch dashboard KPIs' });
+    }
+});
+
 module.exports = router;

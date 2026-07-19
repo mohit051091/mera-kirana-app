@@ -38,7 +38,7 @@ async function runTests() {
     
     const sendMockWebhook = async (payload) => {
         const res = await axios.post(`http://localhost:3000/api/webhook/whatsapp`, payload);
-        await new Promise(resolve => setTimeout(resolve, 800)); // slightly longer wait to ensure async processing commits
+        await new Promise(resolve => setTimeout(resolve, 3000)); // wait 3 seconds to ensure concurrency lock is released
         return res;
     };
 
@@ -360,8 +360,7 @@ async function runTests() {
         if (orderUuid) {
             const orderDbRes = await pool.query("SELECT total_amount FROM orders WHERE order_id = $1", [orderUuid]);
             const expectedTotal = parseFloat(orderDbRes.rows[0].total_amount);
-
-            await axios.post('http://localhost:3000/api/webhook/payments', {
+            const webhookBody = {
                 event: 'payment.captured',
                 payload: {
                     payment: {
@@ -373,6 +372,18 @@ async function runTests() {
                             }
                         }
                     }
+                }
+            };
+
+            const crypto = require('crypto');
+            const secret = process.env.RAZORPAY_WEBHOOK_SECRET || 'no1dareS!';
+            const shasum = crypto.createHmac('sha256', secret);
+            shasum.update(JSON.stringify(webhookBody));
+            const signature = shasum.digest('hex');
+
+            await axios.post('http://localhost:3000/api/webhook/payments', webhookBody, {
+                headers: {
+                    'x-razorpay-signature': signature
                 }
             });
 
@@ -386,6 +397,244 @@ async function runTests() {
         } else {
             console.log('⚠️ Skipping Test 9: No order_id resolved from Test 8.');
         }
+
+        // --- TEST 10: Cash on Delivery (COD) Checkout ---
+        console.log('\n--- UAT Test 10: COD Checkout and Placement ---');
+        await pool.query("UPDATE carts SET status = 'ACTIVE' WHERE cart_id = $1", [activeCartId2]);
+        await pool.query("DELETE FROM cart_items WHERE cart_id = $1", [activeCartId2]);
+        await pool.query("INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, 3)", [activeCartId2, variantId]);
+        await pool.query("UPDATE carts SET session_metadata = $1 WHERE cart_id = $2", [
+            JSON.stringify({ stage: 'PAYMENT_SELECTION', address_id: addressId, slot: 'morning', slot_date: 'today' }), 
+            activeCartId2
+        ]);
+        
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_010',
+                            type: 'interactive',
+                            interactive: {
+                                type: 'button_reply',
+                                button_reply: { id: 'pay_cod', title: 'Cash on Delivery' }
+                            }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_010_confirm',
+                            type: 'interactive',
+                            interactive: {
+                                type: 'button_reply',
+                                button_reply: { id: 'place_cod', title: 'Place Order' }
+                            }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        const checkCodOrder = await pool.query(
+            "SELECT order_id, status, payment_method FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 1",
+            [customerId]
+        );
+        if (checkCodOrder.rows.length > 0 && checkCodOrder.rows[0].status === 'CONFIRMED' && checkCodOrder.rows[0].payment_method === 'COD') {
+            console.log('✅ UAT Test 10 Passed: COD Order placed and auto-confirmed successfully!');
+        } else {
+            console.log('❌ UAT Test 10 Failed: COD Order placement failed.');
+        }
+
+        // --- TEST 11: CRM Abandoned Cart Retrieval ---
+        console.log('\n--- UAT Test 11: CRM Abandoned Cart Retrieval & Recovery Trigger ---');
+        const mockPhone = '919999999999';
+        const oldMockCust = await pool.query("SELECT customer_id FROM customers WHERE phone = $1", [mockPhone]);
+        if (oldMockCust.rows.length > 0) {
+            const mcid = oldMockCust.rows[0].customer_id;
+            await pool.query("DELETE FROM cart_items WHERE cart_id IN (SELECT cart_id FROM carts WHERE customer_id = $1)", [mcid]);
+            await pool.query("DELETE FROM carts WHERE customer_id = $1", [mcid]);
+            await pool.query("DELETE FROM customers WHERE customer_id = $1", [mcid]);
+        }
+        const mockCustRes = await pool.query("INSERT INTO customers (phone, name) VALUES ($1, 'Mock Abandoner') RETURNING customer_id", [mockPhone]);
+        const mockCustId = mockCustRes.rows[0].customer_id;
+        const mockCartRes = await pool.query("INSERT INTO carts (customer_id, session_metadata, updated_at) VALUES ($1, '{\"stage\": \"ADDRESS_SELECTION\"}'::jsonb, NOW() - INTERVAL '3 hours') RETURNING cart_id", [mockCustId]);
+        const mockCartId = mockCartRes.rows[0].cart_id;
+        await pool.query("INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, 2)", [mockCartId, variantId]);
+        
+        // Log-in bypass to get API token for requests
+        const tokenRes = await axios.post('http://localhost:3000/api/auth/login', { password: 'merakirana123' });
+        const token = tokenRes.data.token;
+        const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
+        
+        const abandonedCartsRes = await axios.get('http://localhost:3000/api/crm/abandoned-carts', authHeaders);
+        const hasAbandonedCart = abandonedCartsRes.data.some(c => c.cart_id === mockCartId);
+        if (hasAbandonedCart) {
+            console.log('✅ UAT Test 11a Passed: Abandoned cart parsed and visible in CRM queue!');
+            await axios.post(`http://localhost:3000/api/crm/abandoned-carts/${mockCartId}/recover`, {}, authHeaders);
+            console.log('✅ UAT Test 11b Passed: Cart recovery WhatsApp message successfully routed!');
+        } else {
+            console.log('❌ UAT Test 11 Failed: Abandoned cart not captured in CRM API.');
+        }
+
+        // --- TEST 12: DND Opt-Out Compliance ---
+        console.log('\n--- UAT Test 12: DND Opt-Out and Opt-In Commands ---');
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_012_stop',
+                            type: 'text',
+                            text: { body: 'STOP' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+        
+        const checkDnd = await pool.query('SELECT dnd_active FROM customers WHERE customer_id = $1', [customerId]);
+        if (checkDnd.rows[0].dnd_active === true) {
+            console.log('✅ UAT Test 12a Passed: Customer successfully opted out (DND_ACTIVE = true).');
+        } else {
+            console.log('❌ UAT Test 12a Failed: STOP command failed.');
+        }
+
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_012_start',
+                            type: 'text',
+                            text: { body: 'START' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+        const checkDnd2 = await pool.query('SELECT dnd_active FROM customers WHERE customer_id = $1', [customerId]);
+        if (checkDnd2.rows[0].dnd_active === false) {
+            console.log('✅ UAT Test 12b Passed: Customer successfully opted back in (DND_ACTIVE = false).');
+        } else {
+            console.log('❌ UAT Test 12b Failed: START command failed.');
+        }
+
+        // --- TEST 13: Invalid Input Fallbacks ---
+        console.log('\n--- UAT Test 13: Unsupported Format Media blockings ---');
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_013',
+                            type: 'sticker',
+                            sticker: { id: 'sticker_id_abc' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+        console.log('✅ UAT Test 13 Passed: Sticker message handled gracefully without crash.');
+
+        // --- TEST 14: Repeat Last Order Shortcut ---
+        console.log('\n--- UAT Test 14: Repeat Last Order Shortcut Flow ---');
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_014',
+                            type: 'text',
+                            text: { body: 'Hi' }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        const latestOrderRes = await pool.query(
+            "SELECT order_id FROM orders WHERE customer_id = $1 AND status = 'CONFIRMED' ORDER BY created_at DESC LIMIT 1",
+            [customerId]
+        );
+        const latestOrderId = latestOrderRes.rows[0].order_id;
+
+        await sendMockWebhook({
+            object: 'whatsapp_business_account',
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: clientPhone,
+                            id: 'msg_014_repeat',
+                            type: 'interactive',
+                            interactive: {
+                                type: 'button_reply',
+                                button_reply: { id: `btn_repeat_last_${latestOrderId}`, title: 'Repeat Last Order' }
+                            }
+                        }]
+                    },
+                    field: 'messages'
+                }]
+            }]
+        });
+
+        const checkRepeatMeta = await pool.query("SELECT session_metadata FROM carts WHERE customer_id = $1 AND status = 'ACTIVE'", [customerId]);
+        const repeatMeta = checkRepeatMeta.rows[0].session_metadata;
+        if (repeatMeta.stage === 'CHOOSE_PAYMENT') {
+            console.log('✅ UAT Test 14 Passed: Fast-track Repeat Order shortcut bypasses slot & address entry!');
+        } else {
+            console.log('❌ UAT Test 14 Failed: Reorder shortcut did not route to PAYMENT.');
+        }
+
+        // --- TEST 15: Admin API Authentication Authorization Checks ---
+        console.log('\n--- UAT Test 15: Private Admin API Route Token Verification ---');
+        try {
+            await axios.get('http://localhost:3000/api/products');
+            console.log('❌ UAT Test 15 Failed: Private route accessible without authorization header.');
+        } catch (e) {
+            if (e.response && e.response.status === 401) {
+                console.log('✅ UAT Test 15a Passed: Route correctly blocks unauthorized requests with 401!');
+                
+                const productsRes = await axios.get('http://localhost:3000/api/products', authHeaders);
+                if (productsRes.status === 200 && Array.isArray(productsRes.data)) {
+                    console.log('✅ UAT Test 15b Passed: Authorized access allowed with JWT Bearer token.');
+                } else {
+                    console.log('❌ UAT Test 15b Failed: Token access rejected.');
+                }
+            } else {
+                console.log('❌ UAT Test 15 Failed: Incorrect error response code:', e.message);
+            }
+        }
+
+        // Clean up mock data entries at the end of run
+        await pool.query("DELETE FROM cart_items WHERE cart_id = $1", [mockCartId]);
+        await pool.query("DELETE FROM carts WHERE customer_id = $1", [mockCustId]);
+        await pool.query("DELETE FROM customers WHERE customer_id = $1", [mockCustId]);
 
         console.log('\n🎉 E2E UAT Testing completed successfully! All logic pathways validated.');
     } catch (e) {

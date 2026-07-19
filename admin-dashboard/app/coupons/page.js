@@ -18,6 +18,7 @@ export default function CouponsPage() {
         max_uses: '',
         end_date: ''
     });
+    const [error, setError] = useState('');
 
     useEffect(() => {
         fetchCoupons();
@@ -37,6 +38,7 @@ export default function CouponsPage() {
 
     const handleCreate = async (e) => {
         e.preventDefault();
+        setError('');
         try {
             const payload = {
                 code: newCoupon.code,
@@ -58,7 +60,7 @@ export default function CouponsPage() {
             });
             fetchCoupons();
         } catch (err) {
-            alert(err.response?.data?.error || 'Failed to create coupon');
+            setError(err.response?.data?.error || 'Failed to create coupon');
         }
     };
 
@@ -91,7 +93,7 @@ export default function CouponsPage() {
                     <p className="text-xs text-gray-500 mt-1">Configure customer checkouts discounts, percentage caps, and campaign validity.</p>
                 </div>
                 <button
-                    onClick={() => setShowForm(!showForm)}
+                    onClick={() => { setError(''); setShowForm(!showForm); }}
                     className="bg-green-600 text-white px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-green-700 active:scale-95 transition-all shadow font-semibold text-sm"
                 >
                     <Plus size={18} /> New Coupon Campaign
@@ -103,6 +105,11 @@ export default function CouponsPage() {
                 <div className="bg-white p-6 rounded-2xl shadow-sm mb-8 border border-gray-100">
                     <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b">Configure Discount Campaign</h2>
                     <form onSubmit={handleCreate} className="space-y-4">
+                        {error && (
+                            <div className="bg-red-50 border border-red-200 text-red-600 p-3.5 rounded-xl text-sm font-medium">
+                                ⚠️ {error}
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm font-semibold text-gray-700 mb-1">Coupon Code (Uppercase)</label>

@@ -111,4 +111,63 @@ router.post('/bulk', async (req, res) => {
     }
 });
 
+// PUT /api/products/:id - Update product & variants
+router.put('/:id', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { id } = req.params;
+        const { base_name, description, image_url, variants } = req.body;
+
+        // 1. Update Product details
+        await client.query(
+            'UPDATE products SET base_name = $1, description = $2, image_url = $3 WHERE product_id = $4',
+            [base_name, description, image_url || null, id]
+        );
+
+        // 2. Update Variants
+        if (variants && variants.length > 0) {
+            for (const v of variants) {
+                if (v.variant_id) {
+                    await client.query(
+                        `UPDATE product_variants 
+                         SET weight_label = $1, price = $2, cost_price = $3, stock_quantity = $4, sku_code = $5, is_active = $6
+                         WHERE variant_id = $7 AND product_id = $8`,
+                        [v.weight || 'Standard', v.price, v.cost_price || 0, v.stock || 0, v.sku || null, v.is_active !== false, v.variant_id, id]
+                    );
+                } else {
+                    await client.query(
+                        `INSERT INTO product_variants (product_id, weight_label, price, cost_price, stock_quantity, sku_code) 
+                         VALUES ($1, $2, $3, $4, $5, $6)`,
+                        [id, v.weight || 'Standard', v.price, v.cost_price || 0, v.stock || 0, v.sku || null]
+                    );
+                }
+            }
+        }
+
+        await client.query('COMMIT');
+        res.json({ message: 'Product updated successfully' });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Update Product Error:', err);
+        res.status(500).json({ error: 'Failed to update product' });
+    } finally {
+        client.release();
+    }
+});
+
+// DELETE /api/products/:id - Soft delete product (set is_active = FALSE)
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query('UPDATE products SET is_active = FALSE WHERE product_id = $1', [id]);
+        // Also soft-deactivate all its variants
+        await pool.query('UPDATE product_variants SET is_active = FALSE WHERE product_id = $1', [id]);
+        res.json({ message: 'Product deactivated successfully' });
+    } catch (err) {
+        console.error('Deactivate Product Error:', err);
+        res.status(500).json({ error: 'Failed to deactivate product' });
+    }
+});
+
 module.exports = router;

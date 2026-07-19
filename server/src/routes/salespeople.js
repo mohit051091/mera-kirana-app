@@ -2,6 +2,11 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../database/db');
 
+// Pre-flight database columns migration check
+pool.query("ALTER TABLE sales_commissions ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'UNPAID'").catch(err => {
+    console.error("Migration error on sales_commissions:", err.message);
+});
+
 // GET /api/salespeople - List all salesperson details and aggregate commissions
 router.get('/', async (req, res) => {
     try {
@@ -9,7 +14,8 @@ router.get('/', async (req, res) => {
             SELECT 
                 s.*,
                 COALESCE(count(o.order_id), 0) as total_referrals,
-                COALESCE(sum(sc.commission_amount), 0.00) as total_commissions
+                COALESCE(sum(sc.commission_amount), 0.00) as total_commissions,
+                COALESCE(sum(case when sc.payout_status = 'UNPAID' then sc.commission_amount else 0.00 end), 0.00) as unpaid_commissions
             FROM salespeople s
             LEFT JOIN sales_commissions sc ON s.salesperson_id = sc.salesperson_id
             LEFT JOIN orders o ON sc.order_id = o.order_id AND o.status != 'CANCELLED'
@@ -74,6 +80,7 @@ router.get('/:id/commissions', async (req, res) => {
             SELECT 
                 sc.commission_id,
                 sc.commission_amount,
+                sc.payout_status,
                 sc.created_at,
                 o.readable_order_id,
                 o.total_amount,
@@ -93,17 +100,49 @@ router.get('/:id/commissions', async (req, res) => {
     }
 });
 
-// PUT /api/salespeople/:id - Toggle status (Active / Inactive)
+// PUT /api/salespeople/:id - Update salesperson agent details
 router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { is_active } = req.body;
+        const { name, phone, incentive_type, incentive_value, is_active } = req.body;
         
-        await pool.query('UPDATE salespeople SET is_active = $1 WHERE salesperson_id = $2', [is_active, id]);
-        res.json({ message: 'Salesperson status updated successfully' });
+        await pool.query(
+            `UPDATE salespeople 
+             SET name = $1, phone = $2, incentive_type = $3, incentive_value = $4, is_active = $5
+             WHERE salesperson_id = $6`,
+            [name, phone, incentive_type, parseFloat(incentive_value), is_active !== false, id]
+        );
+        res.json({ message: 'Sales agent details updated successfully' });
     } catch (err) {
         console.error('Error updating salesperson:', err);
-        res.status(500).json({ error: 'Failed to update status' });
+        res.status(500).json({ error: 'Failed to update salesperson details' });
+    }
+});
+
+// DELETE /api/salespeople/:id - Soft-deactivate salesperson (set is_active = FALSE)
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query('UPDATE salespeople SET is_active = FALSE WHERE salesperson_id = $1', [id]);
+        res.json({ message: 'Salesperson deactivated successfully' });
+    } catch (err) {
+        console.error('Error deleting salesperson:', err);
+        res.status(500).json({ error: 'Failed to deactivate salesperson' });
+    }
+});
+
+// POST /api/salespeople/:id/payout - Settle all outstanding commissions to PAID
+router.post('/:id/payout', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await pool.query(
+            "UPDATE sales_commissions SET payout_status = 'PAID' WHERE salesperson_id = $1 AND payout_status = 'UNPAID'",
+            [id]
+        );
+        res.json({ message: 'Commissions marked as settled successfully' });
+    } catch (err) {
+        console.error('Error settling commissions:', err);
+        res.status(500).json({ error: 'Failed to settle commissions payout' });
     }
 });
 

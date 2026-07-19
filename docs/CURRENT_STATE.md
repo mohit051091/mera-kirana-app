@@ -1,20 +1,19 @@
-# Project Current State snapshot
+# Project Current State Snapshot
 
 - **Date:** 2026-07-19
-- **Status:** All core phases (1, 2, and 3) plus comprehensive reliability, security, and testing hardening completed. Fully verified against the updated E2E UAT test suite.
+- **Status:** All core implementation phases (1, 2, and 3) plus comprehensive reliability, production security, CRM capabilities, repeat order shortcuts, and test suite extensions are fully completed. Verified with 100% success against 15 E2E integration test flows.
 
 ## Accomplishments & Current Setup
-- **Production Server:** Node.js Express server running in test mode on port 3000, connected to Railway PostgreSQL.
-- **Secure Server-side Auth:** Implemented `x-admin-password` headers verification middleware, blocking unauthorized access to backend APIs. Client-side Next.js LoginPage stores input passwords in cookies and intercepts Axios requests to inject this header.
-- **Razorpay Sandbox Integration:** Configured API keys and webhook capture listeners at `/api/webhook/payments`. Verifies HMAC signatures, enforces webhook idempotency (via RRN checks), verifies paid amounts against DB order totals, and logs audits to `payment_logs`.
-- **E2E Delivery Verification OTP:** Added random 4-digit verification code generations when order status is marked as `OUT_FOR_DELIVERY` and sends WhatsApp alerts to the customer. Completed OTP validation routing (`POST /verify-delivery`) to mark orders as `DELIVERED` securely.
-- **Bot Concurrency Locking:** Added active phone number memory locks (`Set` wrapper) during webhook message processing to eliminate concurrent race condition threats.
-- **Voice Ordering Hardening:** Added Minimum Order Value (MOV) check blocks on Gemini voice note parse checkouts, alerting customer if cart is under ₹150. Expanded catalog wildcards matching for conversational synonyms (like "doodh" matching "Cow Milk").
-- **Robust Outgoing Channels:** WhatsApp API wrapper with automatic retry backoff policies for rate limits (429) or transient server errors (5xx).
-- **Unsupported Format Blocker:** Captures invalid message formats (stickers, locations, contacts, documents) early, alerting the customer with helpful guidelines.
-- **Dynamic Orders & Support Actions:** Fully implemented handlers for `btn_orders` (fetching the last 3 orders and active delivery statuses) and `btn_support` (providing store support numbers) on WhatsApp quick replies.
-- **Coupons Engine Integration:** Integrated active promo code validation directly into the checkout state machine, subtracting percentage/flat discounts and incrementing coupon uses in database.
+- **Production Server:** Node.js Express server running in test/production configurations, connected to Supabase PostgreSQL.
+- **Production Security:** Fully replaced plain auth headers with bcrypt-password hashing, JWT authentication endpoints (`/api/auth/login`), and JWT Bearer token authorization middleware. Next.js dashboard stores JWT in cookies and intercepts Axios headers.
+- **Dynamic KPIs:** Home dashboard is wired up with live database aggregators summing revenue, AOV, conversion rate, and active referrals.
+- **Mobile Sidebar Toggles:** Added floating burger icons and responsive slide-out animations to sidebar layouts on smaller viewport screens.
+- **Full Database CRUD Modals:** Added forms to Create, Read, Update, and Delete products/variants, delivery partners, and salespeople. Included payout settlement commands.
+- **CRM Cart Recovery Analytics:** Scrapes abandoned carts, displays user Lifetime Value (LTV) summaries, and supports one-click automated cart recovery reminders on WhatsApp.
+- **DND Opt-Out Compliance:** Integrates literal `"STOP"` commands to opt-out users from campaigns and `"START"` to resume opt-ins.
+- **Conversational Repeat Shortcuts:** Returning users get welcome messages recommending their last confirmed order. One-click button click fast-tracks them to payment selection, copying items and configurations.
+- **Passing E2E UAT suite:** Extended tests suite validates 15 distinct operational flows including COD checkouts, CRM triggers, token verification, DND toggles, and reorder bypasses.
 
 ## Next Steps
-1. Push final repository commits to Railway to auto-redeploy production.
-2. Conduct final developer smoke test sequence.
+1. Push final commits to Railway/Supabase to update the cloud instance.
+2. Conduct live production smoke testing with test users.

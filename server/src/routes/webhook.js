@@ -122,35 +122,35 @@ router.post('/whatsapp', async (req, res) => {
         }
         activeUserLocks.add(from);
 
-        const type = msg.type;
-        const messageId = msg.id;
-
-        let text = '';
-        let interactive = null;
-        let audioId = null;
-
-        if (type === 'text') {
-            text = msg.text ? msg.text.body : '';
-        } else if (type === 'interactive') {
-            interactive = msg.interactive;
-            if (interactive.button_reply) {
-                text = interactive.button_reply.title;
-            } else if (interactive.list_reply) {
-                text = interactive.list_reply.title;
-            }
-        } else if (type === 'audio') {
-            audioId = msg.audio ? msg.audio.id : null;
-        } else {
-            // Unsupported message formats (location, image, sticker, document, contact)
-            console.log(`Unsupported message type "${type}" from ${from}, sending explanation fallback.`);
-            await whatsappService.sendText(from, "⚠️ *Unsupported Message Format*\n\nWe currently only support text messages and voice notes to search products, manage carts, or select delivery slots. Please send a text message or a voice note! 🏪");
-            await whatsappService.markAsRead(messageId);
-            return;
-        }
-
-        console.log(`Message from ${from}: "${text || (audioId ? 'Voice Note' : 'Media')}" [${type}] ID: ${messageId}`);
-
         try {
+            const type = msg.type;
+            const messageId = msg.id;
+
+            let text = '';
+            let interactive = null;
+            let audioId = null;
+
+            if (type === 'text') {
+                text = msg.text ? msg.text.body : '';
+            } else if (type === 'interactive') {
+                interactive = msg.interactive;
+                if (interactive.button_reply) {
+                    text = interactive.button_reply.title;
+                } else if (interactive.list_reply) {
+                    text = interactive.list_reply.title;
+                }
+            } else if (type === 'audio') {
+                audioId = msg.audio ? msg.audio.id : null;
+            } else {
+                // Unsupported message formats (location, image, sticker, document, contact)
+                console.log(`Unsupported message type "${type}" from ${from}, sending explanation fallback.`);
+                await whatsappService.sendText(from, "⚠️ *Unsupported Message Format*\n\nWe currently only support text messages and voice notes to search products, manage carts, or select delivery slots. Please send a text message or a voice note! 🏪");
+                await whatsappService.markAsRead(messageId);
+                return;
+            }
+
+            console.log(`Message from ${from}: "${text || (audioId ? 'Voice Note' : 'Media')}" [${type}] ID: ${messageId}`);
+
             // Get active stage and conversation_id
             const lastCartRes = await db.query(`
                 SELECT c.session_metadata 
@@ -204,8 +204,10 @@ router.post('/whatsapp', async (req, res) => {
             customerId = upsertCust.rows[0].customer_id;
             dndActive = upsertCust.rows[0].dnd_active;
 
-            // Trigger stop command if button clicked
-            if (interactive && interactive.button_reply && interactive.button_reply.id === 'btn_dnd_stop') {
+            // Trigger stop command if button clicked or text is 'STOP'
+            const isStopCmd = (type === 'text' && text.trim().toUpperCase() === 'STOP') || 
+                              (interactive && interactive.button_reply && interactive.button_reply.id === 'btn_dnd_stop');
+            if (isStopCmd) {
                 await db.query('UPDATE customers SET dnd_active = true WHERE customer_id = $1', [customerId]);
                 await whatsappService.sendText(from, "🔕 *Opt-out Confirmed!*\nYou have been unsubscribed from all marketing messages and recovery campaigns. To opt back in, send 'START'.");
                 await whatsappService.markAsRead(messageId);
@@ -476,28 +478,116 @@ Rules:
                 metadata = { stage: 'START' };
                 await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
 
-                const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
-                const hasAddress = addrCheck.rows.length > 0;
+                const lastOrderQuery = await db.query(`
+                    SELECT o.order_id, o.total_amount, o.readable_order_id,
+                      COALESCE(
+                        json_agg(
+                          json_build_object(
+                            'base_name', p.base_name,
+                            'weight_label', pv.weight_label,
+                            'quantity', oi.quantity
+                          )
+                        ) FILTER (WHERE oi.order_item_id IS NOT NULL),
+                        '[]'
+                      ) as items
+                    FROM orders o
+                    JOIN order_items oi ON o.order_id = oi.order_id
+                    JOIN product_variants pv ON oi.variant_id = pv.variant_id
+                    JOIN products p ON pv.product_id = p.product_id
+                    WHERE o.customer_id = $1 AND o.status IN ('CONFIRMED', 'DELIVERED')
+                    GROUP BY o.order_id, o.total_amount, o.readable_order_id, o.created_at
+                    ORDER BY o.created_at DESC
+                    LIMIT 1
+                `, [customerId]);
 
-                let tipText = "";
-                if (hasAddress) {
-                    tipText = `💡 *Tip:* Since you've ordered with us before, you can place a new order by sending a voice note containing only products & timing! (e.g. "1 kg Curd kal subah 9 baje bhej do"). We'll automatically deliver to your saved address!`;
+                const hasLastOrder = lastOrderQuery.rows.length > 0;
+
+                if (hasLastOrder) {
+                    const lastOrder = lastOrderQuery.rows[0];
+                    let repeatSummary = `🔄 *Repeat Last Order?* (Order #${lastOrder.readable_order_id})\n`;
+                    lastOrder.items.forEach(item => {
+                        repeatSummary += `• ${item.base_name} (${item.weight_label}) x ${item.quantity}\n`;
+                    });
+                    repeatSummary += `Total: *₹${parseFloat(lastOrder.total_amount).toFixed(2)}*`;
+
+                    const buttons = [
+                        { id: `btn_repeat_last_${lastOrder.order_id}`, title: '🔄 Repeat Last Order' },
+                        { id: 'btn_products', title: '🛍️ Browse Products' },
+                        { id: 'btn_orders', title: '📦 My Orders' }
+                    ];
+                    await whatsappService.sendButtons(from, `Welcome back to *Mera Kirana*! 🏪\n\n${repeatSummary}\n\nOr choose an option below:`, buttons);
                 } else {
-                    tipText = `💡 *Tip:* You can place orders instantly by sending a 10-second voice note! (e.g. "Curd 500g aur 1 kg Paneer kal subah 9 baje bhandup west pin 400078 par bhej do"). Since this is your first order, please mention your delivery address & pincode in the voice note!`;
-                }
+                    const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
+                    const hasAddress = addrCheck.rows.length > 0;
+                    let tipText = "";
+                    if (hasAddress) {
+                        tipText = `💡 *Tip:* Since you've ordered with us before, you can place a new order by sending a voice note containing only products & timing! (e.g. "1 kg Curd kal subah 9 baje bhej do"). We'll automatically deliver to your saved address!`;
+                    } else {
+                        tipText = `💡 *Tip:* You can place orders instantly by sending a 10-second voice note! (e.g. "Curd 500g aur 1 kg Paneer kal subah 9 baje bhandup west pin 400078 par bhej do"). Since this is your first order, please mention your delivery address & pincode in the voice note!`;
+                    }
 
-                const buttons = [
-                    { id: 'btn_products', title: '🛍️ View Products' },
-                    { id: 'btn_orders', title: '📦 My Orders' },
-                    { id: 'btn_support', title: '📞 Call Shop' }
-                ];
-                await whatsappService.sendButtons(from, `Welcome to *Mera Kirana*! 🏪\n\n${tipText}\n\nChoose an option to start:`, buttons);
+                    const buttons = [
+                        { id: 'btn_products', title: '🛍️ View Products' },
+                        { id: 'btn_orders', title: '📦 My Orders' },
+                        { id: 'btn_support', title: '📞 Call Shop' }
+                    ];
+                    await whatsappService.sendButtons(from, `Welcome to *Mera Kirana*! 🏪\n\n${tipText}\n\nChoose an option to start:`, buttons);
+                }
                 await whatsappService.markAsRead(messageId);
                 return;
             }
 
             if (interactive && interactive.button_reply) {
                 const buttonId = interactive.button_reply.id;
+
+                if (buttonId.startsWith('btn_repeat_last_')) {
+                    const lastOrderId = buttonId.replace('btn_repeat_last_', '');
+                    const oldOrderQuery = await db.query('SELECT * FROM orders WHERE order_id = $1 LIMIT 1', [lastOrderId]);
+                    if (oldOrderQuery.rows.length === 0) {
+                        await whatsappService.sendText(from, "Could not find your last order. Please browse catalog.");
+                        return;
+                    }
+                    const oldOrder = oldOrderQuery.rows[0];
+                    const oldItemsQuery = await db.query(`
+                        SELECT oi.variant_id, oi.quantity, oi.unit_price, pv.weight_label, p.base_name
+                        FROM order_items oi
+                        JOIN product_variants pv ON oi.variant_id = pv.variant_id
+                        JOIN products p ON pv.product_id = p.product_id
+                        WHERE oi.order_id = $1
+                    `, [lastOrderId]);
+                    
+                    await db.query('DELETE FROM cart_items WHERE cart_id = $1', [cartId]);
+                    let subtotal = 0;
+                    let summary = "🔄 *Repeat Last Order Summary:*\n\n";
+                    for (const item of oldItemsQuery.rows) {
+                        await db.query(
+                            'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3)',
+                            [cartId, item.variant_id, item.quantity]
+                        );
+                        const itemSub = parseFloat(item.unit_price) * parseInt(item.quantity);
+                        subtotal += itemSub;
+                        summary += `• ${item.base_name} (${item.weight_label}) x ${item.quantity} = *₹${itemSub.toFixed(2)}*\n`;
+                    }
+                    
+                    metadata = { 
+                        stage: 'CHOOSE_PAYMENT',
+                        delivery_slot: oldOrder.delivery_slot,
+                        address: oldOrder.delivery_address_snapshot
+                    };
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    
+                    summary += `\n*Subtotal:* ₹${subtotal.toFixed(2)}`;
+                    summary += `\n*Deliver To:* ${oldOrder.delivery_address_snapshot}`;
+                    summary += `\n*Slot:* ${oldOrder.delivery_slot}`;
+                    
+                    const buttons = [
+                        { id: 'pay_upi', title: '💳 Pay Online' },
+                        { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                    ];
+                    await whatsappService.sendButtons(from, `${summary}\n\nSelect Payment Method to confirm repeat order:`, buttons);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
 
                 if (buttonId === 'btn_orders') {
                     const recentOrders = await db.query(`
