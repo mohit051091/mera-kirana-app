@@ -1,5 +1,6 @@
 const axios = require('axios');
 require('dotenv').config();
+const { logError } = require('./logger');
 
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 const TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -7,9 +8,7 @@ const WHATSAPP_API_URL = `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_ID}/
 
 // Validate environment variables on startup
 if (!WHATSAPP_PHONE_ID || !TOKEN) {
-    console.error('CRITICAL: Missing WhatsApp credentials!');
-    console.error(`WHATSAPP_PHONE_ID: ${WHATSAPP_PHONE_ID ? 'SET' : 'MISSING'}`);
-    console.error(`WHATSAPP_ACCESS_TOKEN: ${TOKEN ? 'SET' : 'MISSING'}`);
+    logError('CRITICAL: Missing WhatsApp credentials!', 'whatsapp_init');
 }
 
 const logOutgoingMessage = async (to, data, messageId) => {
@@ -116,19 +115,7 @@ const sendMessage = async (data) => {
         }
         return resData;
     } catch (error) {
-        // Enhanced error logging
-        if (error.response) {
-            console.error('WhatsApp API Error Response:');
-            console.error('Status:', error.response.status);
-            console.error('Data:', JSON.stringify(error.response.data, null, 2));
-            console.error('Headers:', error.response.headers);
-        } else if (error.request) {
-            console.error('No response received from WhatsApp API');
-            console.error('Request:', error.request);
-        } else {
-            console.error('Error setting up WhatsApp request:', error.message);
-        }
-        console.error('Full error stack:', error.stack);
+        logError(error, 'WhatsApp_send_message_API');
         throw error;
     }
 };
