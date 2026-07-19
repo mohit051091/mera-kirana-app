@@ -754,7 +754,7 @@ async function runTests() {
 
         console.log('\n🎉 E2E UAT Testing completed successfully! All logic pathways validated.');
     } catch (e) {
-        console.error('❌ UAT Testing crashed:', e.message);
+        console.error('❌ UAT Testing crashed:', e);
     } finally {
         pool.end();
         console.log('🔌 Database pool closed.');

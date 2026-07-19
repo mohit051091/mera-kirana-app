@@ -88,6 +88,26 @@ async function runMigration() {
         `);
         console.log('✅ Checked/Created Table: system_settings');
 
+        // Seed default settings if not exists
+        const defaultSettings = [
+            { key: 'minimum_order_value', value: 150 },
+            { key: 'voice_rate_limit_hourly', value: 3 },
+            { key: 'voice_rate_limit_daily', value: 10 },
+            { key: 'voice_cost_markup', value: 2 },
+            { key: 'voice_duration_cap', value: 30 },
+            { key: 'unsupported_format_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" },
+            { key: 'welcome_tip_new_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" },
+            { key: 'welcome_tip_repeat_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" }
+        ];
+        for (const setting of defaultSettings) {
+            await pool.query(`
+                INSERT INTO system_settings (key, value, updated_at)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (key) DO NOTHING
+            `, [setting.key, JSON.stringify(setting.value)]);
+        }
+        console.log('✅ Seeded Default System Settings');
+
         // 7. Create pincode_master table
         await pool.query(`
             CREATE TABLE IF NOT EXISTS pincode_master (

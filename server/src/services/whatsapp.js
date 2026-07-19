@@ -276,6 +276,30 @@ const downloadMedia = async (mediaId) => {
     }
 };
 
+const uploadMedia = async (buffer, filename, mimeType) => {
+    try {
+        const formData = new FormData();
+        formData.append('messaging_product', 'whatsapp');
+        const blob = new Blob([buffer], { type: mimeType });
+        formData.append('file', blob, filename);
+        formData.append('type', mimeType);
+
+        const response = await axios.post(
+            `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_ID}/media`,
+            formData,
+            {
+                headers: {
+                    'Authorization': `Bearer ${TOKEN}`
+                }
+            }
+        );
+        return response.data.id;
+    } catch (error) {
+        console.error('Error uploading Meta media:', error.response?.data || error.message);
+        throw error;
+    }
+};
+
 module.exports = {
     sendText,
     sendButtons,
@@ -286,5 +310,6 @@ module.exports = {
     markAsRead,
     sendImage,
     sendAudio,
-    downloadMedia
+    downloadMedia,
+    uploadMedia
 };

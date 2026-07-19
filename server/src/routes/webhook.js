@@ -247,6 +247,11 @@ router.post('/whatsapp', async (req, res) => {
             EN: "🔄 Repeat Last Order",
             HI: "🔄 पिछला ऑर्डर",
             MR: "🔄 शेवटची ऑर्डर"
+        },
+        CATALOG_PARSE_ERROR: {
+            EN: "Sorry, we couldn't parse your catalog order. Please try again or browse products.",
+            HI: "क्षमा करें, हम आपके कैटलॉग ऑर्डर को पढ़ नहीं सके। कृपया पुन: प्रयास करें या उत्पाद ब्राउज़ करें।",
+            MR: "क्षमस्व, आम्ही तुमच्या कॅटलॉग ऑर्डरमधील वस्तू वाचू शकलो नाही. कृपया पुन्हा प्रयत्न करा किंवा उत्पादने पहा."
         }
     };
 
@@ -492,9 +497,9 @@ router.post('/whatsapp', async (req, res) => {
                         const retailerId = item.product_retailer_id;
                         const qty = item.quantity || 1;
 
-                        // Look up the variant_id matching meta_product_retailer_id
+                        // Look up the variant_id matching meta_product_retailer_id OR sku_code
                         const variantQuery = await db.query(
-                            'SELECT variant_id FROM product_variants WHERE meta_product_retailer_id = $1 AND is_active = true LIMIT 1',
+                            'SELECT variant_id FROM product_variants WHERE (meta_product_retailer_id = $1 OR sku_code = $1) AND is_active = true LIMIT 1',
                             [retailerId]
                         );
 
@@ -543,7 +548,8 @@ router.post('/whatsapp', async (req, res) => {
                     }
                 }
 
-                await whatsappService.sendText(from, "Sorry, I couldn't parse your catalog order. Please try again or browse products.");
+                const parseErrorMsg = TRANSLATIONS.CATALOG_PARSE_ERROR[userLang];
+                await whatsappService.sendText(from, parseErrorMsg);
                 await whatsappService.markAsRead(messageId);
                 return;
             }
