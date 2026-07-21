@@ -340,7 +340,8 @@ async function runMigration() {
                             text,
                             target_language_code: LANG_MAP[v.lang],
                             speaker: 'ritu',
-                            model: 'bulbul:v3'
+                            model: 'bulbul:v3',
+                            audio_encoding: 'mp3'
                         }, {
                             headers: { 'api-subscription-key': SARVAM_KEY, 'Content-Type': 'application/json' },
                             timeout: 30000
@@ -350,8 +351,8 @@ async function runMigration() {
                             const audioBuffer = Buffer.from(ttsRes.data.audios[0], 'base64');
                             const formData = new FormData();
                             formData.append('messaging_product', 'whatsapp');
-                            formData.append('file', audioBuffer, { filename: 'tip.wav', contentType: 'audio/wav' });
-                            formData.append('type', 'audio/wav');
+                            formData.append('file', audioBuffer, { filename: 'tip.mp3', contentType: 'audio/mpeg' });
+                            formData.append('type', 'audio/mpeg');
 
                             console.log(`  → Uploading audio buffer to Meta WhatsApp (${v.settingsKey})...`);
                             const uploadRes = await axios.post(
