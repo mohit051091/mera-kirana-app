@@ -963,13 +963,14 @@ Rules:
                     const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
                     const hasAddress = addrCheck.rows.length > 0;
                     
-                    // Send pre-generated welcome tip voice note (cached media ID from seed script)
-                    const tipType = hasAddress ? 'repeat' : 'new';
-                    const tipMediaKey = `welcome_tip_${tipType}_media_id_${userLang}`;
-                    const cachedMediaId = await getSetting(tipMediaKey, null);
+                    // Send pre-generated welcome tip Hinglish voice note (cached media ID from seed script)
+                    const tipMediaKey = hasAddress ? 'welcome_tip_repeat_media_id' : 'welcome_tip_new_media_id';
+                    let cachedMediaId = await getSetting(tipMediaKey, null);
 
                     if (cachedMediaId) {
+                        cachedMediaId = String(cachedMediaId).replace(/^"|"$/g, '').trim();
                         try {
+                            console.log(`Sending welcome tip voice note (${tipMediaKey}: ${cachedMediaId}) to ${from}...`);
                             await whatsappService.sendAudio(from, cachedMediaId);
                         } catch (audioErr) {
                             console.error('Welcome tip audio send failed:', audioErr.message);

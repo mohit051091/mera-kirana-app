@@ -300,9 +300,9 @@ async function runMigration() {
         }
 
         // 18. Auto-seed welcome tip voice note media IDs if missing
-        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_EN' LIMIT 1");
+        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id' LIMIT 1");
         if (mediaCheck.rows.length === 0) {
-            console.log('🎙️ Welcome tip voice notes missing in DB. Auto-generating via Sarvam TTS and uploading to Meta...');
+            console.log('🎙️ Welcome tip voice notes missing in DB. Auto-generating Hinglish voice notes via Sarvam TTS and uploading to Meta...');
             try {
                 const SARVAM_KEY = process.env.SARVAM_API_KEY || 'sk_o2r2qvi7_wO6CZZ4vWWlGkgZ45SPwCBrJ';
                 const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || 'EAAWJurSGNC8BR6Db6DCyhaP5v1vDkdEyv3PkhR2mj4ycI8lQsvBUl6NbaGW8r4rZC5g4ZBGdFK8LoH8d2sds3WVYAiowCDAR3tEc1sHhW1ZAbXYnaXyZBDtuJnkjPQqUe5SNcoRgecHfcMJTKF7Ee4rgK4SK2gM1fv44NqAY4ZAEq3JuJjdnxSztTVZBL91nL8PwZDZD';
@@ -311,34 +311,22 @@ async function runMigration() {
                 if (SARVAM_KEY && WA_TOKEN && WA_PHONE_ID) {
                     const axios = require('axios');
                     const FormData = require('form-data');
-                    const TIPS = {
-                        TIP_NEW: {
-                            EN: "Welcome to Mera Kirana! You can browse our dairy products by tapping View Products below. Or, simply send a voice note telling us what you need — for example, say '2 packets of curd and 1 litre milk'. We'll add it to your cart automatically!",
-                            HI: "मेरा किराना में आपका स्वागत है! नीचे 'उत्पाद देखें' बटन दबाकर हमारे डेयरी प्रोडक्ट्स देखें। या, बस एक वॉइस नोट भेजें — जैसे '2 पैकेट दही और 1 लीटर दूध'। हम इसे अपने आप आपकी कार्ट में जोड़ देंगे!",
-                            MR: "मेरा किराना मध्ये आपले स्वागत आहे! खाली 'उत्पादने पहा' बटण दाबून आमची डेअरी उत्पादने पहा. किंवा, फक्त एक व्हॉइस नोट पाठवा — जसे '2 पॅकेट दही आणि 1 लिटर दूध'. आम्ही ते आपोआप तुमच्या कार्टमध्ये जोडू!"
-                        },
-                        TIP_REPEAT: {
-                            EN: "Welcome back to Mera Kirana! You can repeat your last order with one tap, browse products, or send a voice note to order directly.",
-                            HI: "मेरा किराना में फिर से आपका स्वागत है! आप एक टैप से अपना पिछला ऑर्डर दोहरा सकते हैं, प्रोडक्ट्स देख सकते हैं, या सीधे वॉइस नोट भेजकर ऑर्डर कर सकते हैं।",
-                            MR: "मेरा किराना मध्ये पुन्हा स्वागत! तुम्ही एका टॅपने तुमची शेवटची ऑर्डर पुन्हा करू शकता, उत्पादने पाहू शकता, किंवा थेट व्हॉइस नोट पाठवून ऑर्डर करू शकता।"
-                        }
-                    };
-                    const LANG_MAP = { EN: 'en-IN', HI: 'hi-IN', MR: 'mr-IN' };
                     const variants = [
-                        { settingsKey: 'welcome_tip_new_media_id_EN', type: 'TIP_NEW', lang: 'EN' },
-                        { settingsKey: 'welcome_tip_new_media_id_HI', type: 'TIP_NEW', lang: 'HI' },
-                        { settingsKey: 'welcome_tip_new_media_id_MR', type: 'TIP_NEW', lang: 'MR' },
-                        { settingsKey: 'welcome_tip_repeat_media_id_EN', type: 'TIP_REPEAT', lang: 'EN' },
-                        { settingsKey: 'welcome_tip_repeat_media_id_HI', type: 'TIP_REPEAT', lang: 'HI' },
-                        { settingsKey: 'welcome_tip_repeat_media_id_MR', type: 'TIP_REPEAT', lang: 'MR' }
+                        {
+                            settingsKey: 'welcome_tip_new_media_id',
+                            text: "Welcome to Mera Kirana! Aap humare dairy products dekhne ke liye neeche View Products button par tap kar sakte hain. Ya phir aap simply ek voice note bhej kar order kar sakte hain — for example, keh sakte hain: 2 packets of curd and 1 litre milk. Hum use aapke cart mein automatically add kar denge!"
+                        },
+                        {
+                            settingsKey: 'welcome_tip_repeat_media_id',
+                            text: "Welcome back to Mera Kirana! Aap ek tap se apna last order repeat kar sakte hain, products browse kar sakte hain, ya direct voice note bhej kar order kar sakte hain!"
+                        }
                     ];
 
                     for (const v of variants) {
-                        const text = TIPS[v.type][v.lang];
-                        console.log(`  → Synthesizing Sarvam TTS audio for ${v.settingsKey}...`);
+                        console.log(`  → Synthesizing Sarvam TTS Hinglish audio for ${v.settingsKey}...`);
                         const ttsRes = await axios.post('https://api.sarvam.ai/text-to-speech', {
-                            text,
-                            target_language_code: LANG_MAP[v.lang],
+                            text: v.text,
+                            target_language_code: 'hi-IN',
                             speaker: 'ritu',
                             model: 'bulbul:v3',
                             audio_encoding: 'mp3'
@@ -351,7 +339,7 @@ async function runMigration() {
                             const audioBuffer = Buffer.from(ttsRes.data.audios[0], 'base64');
                             const formData = new FormData();
                             formData.append('messaging_product', 'whatsapp');
-                            formData.append('file', audioBuffer, { filename: 'tip.mp3', contentType: 'audio/mpeg' });
+                            formData.append('file', audioBuffer, { filename: 'welcome_tip.mp3', contentType: 'audio/mpeg' });
                             formData.append('type', 'audio/mpeg');
 
                             console.log(`  → Uploading audio buffer to Meta WhatsApp (${v.settingsKey})...`);
@@ -361,7 +349,7 @@ async function runMigration() {
                                 { headers: { 'Authorization': `Bearer ${WA_TOKEN}`, ...formData.getHeaders() } }
                             );
 
-                            const mediaId = uploadRes.data.id;
+                            const mediaId = String(uploadRes.data.id).trim();
                             await pool.query(
                                 `INSERT INTO system_settings (key, value) VALUES ($1, $2)
                                  ON CONFLICT (key) DO UPDATE SET value = $2`,
