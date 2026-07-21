@@ -1,6 +1,6 @@
 # Project Current State Snapshot
 
-- **Date:** 2026-07-19
+- **Date:** 2026-07-21
 - **Status:** Phase 1 (Sarvam Speech-to-Text), Phase 2 (Vernacular multi-language support), and Phase 3 (Subscriptions UI and backend/client integrations) are fully implemented and verified. All 17 E2E UAT tests passed successfully!
 
 ## Accomplishments & Current Setup
@@ -8,7 +8,9 @@
 - **Phase 2 (Vernacular support):** Added language preferences column to database, created Hindi and Marathi command switch listeners (`HINDI`, `MARATHI`, `ENGLISH`), and translated bot templates (greetings, warnings, bills, buttons).
 - **Phase 3 (Subscriptions management):** Created `subscriptions.js` Express sub-router and registered it to verifyAdminAuth, developed Next.js dashboard subscriptions manager UI with calendar dates/quantity edits and status updates, and added WhatsApp schedule controls (Pause, Resume, Cancel, Create new subscription wizards).
 - **Database Performance Optimization:** Added indexes to the `subscriptions` table on `customer_id` and composite `(status, created_at)` columns to prevent table scans as subscriber volumes scale.
-- **Production Server:** Node.js Express server running in test/production configurations, connected to Supabase PostgreSQL.
+- **Production Server:** Node.js Express server running on Railway connected to Railway PostgreSQL database (`postgres.railway.internal`).
+- **One-Time Welcome Audio Caching:** Welcome tip audio notes are generated ONCE via Sarvam TTS, uploaded to Meta's media API, and cached as WhatsApp media IDs in `system_settings` (`welcome_tip_new_media_id_EN/HI/MR`). Webhook dispatches cached media IDs directly, eliminating all external audio URL dependencies (preventing 404 errors) and incurring zero ongoing TTS charges on user messages.
+- **WhatsApp Catalog Order Parser:** Intercepts native catalog order submissions, matches items using both `meta_product_retailer_id` and case-insensitive `sku_code`, backfills missing `meta_product_retailer_id` columns automatically in database migrations, and logs unmatched items for easy store administration.
 - **Production Security:** Fully replaced plain auth headers with bcrypt-password hashing, JWT authentication endpoints, and JWT Bearer token authorization middleware. Next.js dashboard stores JWT in cookies and intercepts Axios headers.
 - **Dynamic KPIs:** Home dashboard is wired up with live database aggregators summing revenue, AOV, conversion rate, and active referrals.
 - **Mobile Sidebar Toggles:** Added floating burger icons and responsive slide-out animations to sidebar layouts on smaller viewport screens.

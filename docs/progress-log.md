@@ -113,3 +113,11 @@
   3. Added welcome tip audio settings keys to Settings page configuration.
   4. Resolved Meta API 404 media upload errors by seeding the database settings table with a working default audio URL fallback.
   5. Fixed catalog order parsing crashes by falling back to query the `sku_code` field on variant checks, and localized parsing error messages.
+
+## [2026-07-21] Optimization: One-Time Welcome Tip Media ID Caching & Catalog Matching
+- **Trigger:** Webhook audio dispatches failed with 404 errors due to dead external URLs; catalog orders failed when variant retailer IDs were unset.
+- **Action:**
+  1. **One-Time Audio Media ID Seeding:** Created `scratch/seed_welcome_audio.js` to generate welcome tip audio notes ONCE via Sarvam TTS, upload them to Meta WhatsApp, and store their returned media IDs (`welcome_tip_new_media_id_EN/HI/MR`) in `system_settings`.
+  2. **Zero-Cost Webhook Audio Dispatch:** Refactored greeting webhook handler to fetch and dispatch pre-cached media IDs directly from `system_settings`. Eliminates all external URL dependencies (fixing Meta 404 errors) and incurs zero ongoing TTS charges per user message.
+  3. **Robust Catalog Variant Matching:** Enhanced `type === 'order'` handler in `webhook.js` to check both `meta_product_retailer_id` and case-insensitive `sku_code`, added detailed debug logging, and added a database migration step to auto-backfill `meta_product_retailer_id` from `sku_code`.
+  4. **Purged Supabase References:** Cleaned out Supabase host references from `.env` and aligned documentation with Railway PostgreSQL infrastructure.
