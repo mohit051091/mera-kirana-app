@@ -304,9 +304,9 @@ async function runMigration() {
         if (mediaCheck.rows.length === 0) {
             console.log('🎙️ Welcome tip voice notes missing in DB. Auto-generating via Sarvam TTS and uploading to Meta...');
             try {
-                const SARVAM_KEY = process.env.SARVAM_API_KEY;
-                const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-                const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+                const SARVAM_KEY = process.env.SARVAM_API_KEY || 'sk_o2r2qvi7_wO6CZZ4vWWlGkgZ45SPwCBrJ';
+                const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || 'EAAWJurSGNC8BR6Db6DCyhaP5v1vDkdEyv3PkhR2mj4ycI8lQsvBUl6NbaGW8r4rZC5g4ZBGdFK8LoH8d2sds3WVYAiowCDAR3tEc1sHhW1ZAbXYnaXyZBDtuJnkjPQqUe5SNcoRgecHfcMJTKF7Ee4rgK4SK2gM1fv44NqAY4ZAEq3JuJjdnxSztTVZBL91nL8PwZDZD';
+                const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '871709562699676';
 
                 if (SARVAM_KEY && WA_TOKEN && WA_PHONE_ID) {
                     const axios = require('axios');
@@ -335,6 +335,7 @@ async function runMigration() {
 
                     for (const v of variants) {
                         const text = TIPS[v.type][v.lang];
+                        console.log(`  → Synthesizing Sarvam TTS audio for ${v.settingsKey}...`);
                         const ttsRes = await axios.post('https://api.sarvam.ai/text-to-speech', {
                             text,
                             target_language_code: LANG_MAP[v.lang],
@@ -352,6 +353,7 @@ async function runMigration() {
                             formData.append('file', audioBuffer, { filename: 'tip.wav', contentType: 'audio/wav' });
                             formData.append('type', 'audio/wav');
 
+                            console.log(`  → Uploading audio buffer to Meta WhatsApp (${v.settingsKey})...`);
                             const uploadRes = await axios.post(
                                 `https://graph.facebook.com/v17.0/${WA_PHONE_ID}/media`,
                                 formData,
@@ -364,14 +366,14 @@ async function runMigration() {
                                  ON CONFLICT (key) DO UPDATE SET value = $2`,
                                 [v.settingsKey, JSON.stringify(mediaId)]
                             );
-                            console.log(`  ✅ Auto-seeded welcome audio media ID for ${v.settingsKey}`);
+                            console.log(`  ✅ Successfully seeded welcome audio media ID: ${mediaId} for ${v.settingsKey}`);
                         }
                     }
                 } else {
                     console.warn('⚠️ Missing API keys for auto-seeding welcome audio.');
                 }
             } catch (autoErr) {
-                console.error('⚠️ Auto-seeding welcome audio failed:', autoErr.message);
+                console.error('⚠️ Auto-seeding welcome audio failed:', autoErr.response?.data || autoErr.message);
             }
         }
 
