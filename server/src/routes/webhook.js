@@ -964,7 +964,7 @@ Rules:
                     const hasAddress = addrCheck.rows.length > 0;
                     
                     // Send pre-generated welcome tip Hinglish voice note (cached media ID from seed script)
-                    const tipMediaKey = hasAddress ? 'welcome_tip_repeat_media_id' : 'welcome_tip_new_media_id';
+                    const tipMediaKey = hasAddress ? 'welcome_tip_repeat_media_id_v2' : 'welcome_tip_new_media_id_v2';
                     let cachedMediaId = await getSetting(tipMediaKey, null);
 
                     if (cachedMediaId) {
