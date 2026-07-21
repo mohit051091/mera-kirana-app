@@ -94,10 +94,8 @@ async function runMigration() {
             { key: 'voice_rate_limit_hourly', value: 3 },
             { key: 'voice_rate_limit_daily', value: 10 },
             { key: 'voice_cost_markup', value: 2 },
-            { key: 'voice_duration_cap', value: 30 },
-            { key: 'unsupported_format_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" },
-            { key: 'welcome_tip_new_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" },
-            { key: 'welcome_tip_repeat_audio_url', value: "https://www.learningcontainer.com/wp-content/uploads/2020/02/Kalimba.ogg" }
+            { key: 'voice_duration_cap', value: 30 }
+            // Welcome tip audio media IDs are seeded separately via:  node scratch/seed_welcome_audio.js
         ];
         for (const setting of defaultSettings) {
             await pool.query(`
@@ -289,6 +287,16 @@ async function runMigration() {
         if (!customerCols.includes('language')) {
             await pool.query(`ALTER TABLE customers ADD COLUMN language VARCHAR(5) DEFAULT 'EN';`);
             console.log('✅ Added Column: language to customers');
+        }
+
+        // 17. Backfill meta_product_retailer_id from sku_code where missing
+        const backfillRes = await pool.query(`
+            UPDATE product_variants 
+            SET meta_product_retailer_id = sku_code 
+            WHERE meta_product_retailer_id IS NULL AND sku_code IS NOT NULL
+        `);
+        if (backfillRes.rowCount > 0) {
+            console.log(`✅ Backfilled meta_product_retailer_id for ${backfillRes.rowCount} product variants`);
         }
 
         console.log('🎉 Database Migration Successful!');

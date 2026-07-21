@@ -487,19 +487,23 @@ router.post('/whatsapp', async (req, res) => {
 
                 const orderData = msg.order;
                 const productItems = orderData ? orderData.product_items : [];
+                console.log(`[CATALOG ORDER] Customer ${from}: ${productItems.length} items received. Retailer IDs:`, productItems.map(i => i.product_retailer_id));
 
                 if (productItems && productItems.length > 0) {
                     // Clear existing cart items
                     await db.query('DELETE FROM cart_items WHERE cart_id = $1', [cartId]);
 
                     let addedCount = 0;
+                    let unmatchedIds = [];
                     for (const item of productItems) {
                         const retailerId = item.product_retailer_id;
                         const qty = item.quantity || 1;
 
-                        // Look up the variant_id matching meta_product_retailer_id OR sku_code
+                        // Look up variant: check meta_product_retailer_id, then sku_code (case-insensitive)
                         const variantQuery = await db.query(
-                            'SELECT variant_id FROM product_variants WHERE (meta_product_retailer_id = $1 OR sku_code = $1) AND is_active = true LIMIT 1',
+                            `SELECT variant_id FROM product_variants 
+                             WHERE (meta_product_retailer_id = $1 OR LOWER(sku_code) = LOWER($1)) 
+                             AND is_active = true LIMIT 1`,
                             [retailerId]
                         );
 
@@ -510,7 +514,15 @@ router.post('/whatsapp', async (req, res) => {
                                 [cartId, variantId, qty]
                             );
                             addedCount++;
+                            console.log(`[CATALOG ORDER] Matched retailer_id "${retailerId}" -> variant ${variantId}`);
+                        } else {
+                            unmatchedIds.push(retailerId);
+                            console.warn(`[CATALOG ORDER] ⚠️ No match for retailer_id "${retailerId}" in product_variants (checked meta_product_retailer_id and sku_code)`);
                         }
+                    }
+
+                    if (unmatchedIds.length > 0) {
+                        console.warn(`[CATALOG ORDER] Unmatched IDs: [${unmatchedIds.join(', ')}]. These need to be added to product_variants.meta_product_retailer_id or sku_code.`);
                     }
 
                     if (addedCount > 0) {
@@ -548,6 +560,7 @@ router.post('/whatsapp', async (req, res) => {
                     }
                 }
 
+                console.error(`[CATALOG ORDER] ❌ Failed to parse catalog order for ${from}. 0 items matched.`);
                 const parseErrorMsg = TRANSLATIONS.CATALOG_PARSE_ERROR[userLang];
                 await whatsappService.sendText(from, parseErrorMsg);
                 await whatsappService.markAsRead(messageId);
@@ -950,17 +963,17 @@ Rules:
                     const addrCheck = await db.query('SELECT 1 FROM addresses WHERE customer_id = $1 LIMIT 1', [customerId]);
                     const hasAddress = addrCheck.rows.length > 0;
                     
-                    let tipAudioUrl = "";
-                    if (hasAddress) {
-                        tipAudioUrl = await getSetting('welcome_tip_repeat_audio_url', 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/tip_repeat.ogg');
-                    } else {
-                        tipAudioUrl = await getSetting('welcome_tip_new_audio_url', 'https://github.com/mohit051091/mera-kirana-app/raw/main/assets/welcome_tip.ogg');
-                    }
+                    // Send pre-generated welcome tip voice note (cached media ID from seed script)
+                    const tipType = hasAddress ? 'repeat' : 'new';
+                    const tipMediaKey = `welcome_tip_${tipType}_media_id_${userLang}`;
+                    const cachedMediaId = await getSetting(tipMediaKey, null);
 
-                    try {
-                        await whatsappService.sendAudio(from, tipAudioUrl);
-                    } catch (audioErr) {
-                        logError(audioErr, 'send_welcome_tip_audio_failed');
+                    if (cachedMediaId) {
+                        try {
+                            await whatsappService.sendAudio(from, cachedMediaId);
+                        } catch (audioErr) {
+                            console.error('Welcome tip audio send failed:', audioErr.message);
+                        }
                     }
 
                     const buttons = [
