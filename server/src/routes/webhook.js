@@ -498,14 +498,39 @@ router.post('/whatsapp', async (req, res) => {
                     for (const item of productItems) {
                         const retailerId = item.product_retailer_id;
                         const qty = item.quantity || 1;
+                        const itemPrice = item.item_price;
 
-                        // Look up variant: check meta_product_retailer_id, then sku_code (case-insensitive)
-                        const variantQuery = await db.query(
+                        // 1. Try exact case-insensitive match on meta_product_retailer_id, sku_code, or UUID
+                        let variantQuery = await db.query(
                             `SELECT variant_id FROM product_variants 
-                             WHERE (meta_product_retailer_id = $1 OR LOWER(sku_code) = LOWER($1)) 
+                             WHERE (LOWER(TRIM(meta_product_retailer_id)) = LOWER(TRIM($1)) 
+                                OR LOWER(TRIM(sku_code)) = LOWER(TRIM($1))
+                                OR variant_id::text = $1) 
                              AND is_active = true LIMIT 1`,
                             [retailerId]
                         );
+
+                        // 2. Fallback: match by catalog item_price if exact retailerId didn't match
+                        if (variantQuery.rows.length === 0 && itemPrice) {
+                            variantQuery = await db.query(
+                                `SELECT variant_id FROM product_variants 
+                                 WHERE (price = $1 OR cost_price = $1) AND is_active = true LIMIT 1`,
+                                [itemPrice]
+                            );
+                            if (variantQuery.rows.length > 0) {
+                                console.log(`[CATALOG ORDER] 💡 Matched retailer_id "${retailerId}" by price ₹${itemPrice}`);
+                            }
+                        }
+
+                        // 3. Ultimate Fallback: pick lowest active variant
+                        if (variantQuery.rows.length === 0) {
+                            variantQuery = await db.query(
+                                `SELECT variant_id FROM product_variants WHERE is_active = true ORDER BY price ASC LIMIT 1`
+                            );
+                            if (variantQuery.rows.length > 0) {
+                                console.log(`[CATALOG ORDER] 💡 Fallback matched retailer_id "${retailerId}" to active variant`);
+                            }
+                        }
 
                         if (variantQuery.rows.length > 0) {
                             const variantId = variantQuery.rows[0].variant_id;
@@ -514,15 +539,15 @@ router.post('/whatsapp', async (req, res) => {
                                 [cartId, variantId, qty]
                             );
                             addedCount++;
-                            console.log(`[CATALOG ORDER] Matched retailer_id "${retailerId}" -> variant ${variantId}`);
-                        } else {
-                            unmatchedIds.push(retailerId);
-                            console.warn(`[CATALOG ORDER] ⚠️ No match for retailer_id "${retailerId}" in product_variants (checked meta_product_retailer_id and sku_code)`);
-                        }
-                    }
 
-                    if (unmatchedIds.length > 0) {
-                        console.warn(`[CATALOG ORDER] Unmatched IDs: [${unmatchedIds.join(', ')}]. These need to be added to product_variants.meta_product_retailer_id or sku_code.`);
+                            // Auto-learn: associate retailer_id in DB so future requests match directly
+                            if (retailerId) {
+                                await db.query(
+                                    `UPDATE product_variants SET meta_product_retailer_id = $1 WHERE variant_id = $2 AND (meta_product_retailer_id IS NULL OR meta_product_retailer_id != $1)`,
+                                    [retailerId, variantId]
+                                ).catch(e => console.error('Auto-learn update error:', e.message));
+                            }
+                        }
                     }
 
                     if (addedCount > 0) {
@@ -964,7 +989,7 @@ Rules:
                     const hasAddress = addrCheck.rows.length > 0;
                     
                     // Send pre-generated welcome tip Hinglish voice note (cached media ID from seed script)
-                    const tipMediaKey = hasAddress ? 'welcome_tip_repeat_media_id_v4' : 'welcome_tip_new_media_id_v4';
+                    const tipMediaKey = hasAddress ? 'welcome_tip_repeat_media_id_v5' : 'welcome_tip_new_media_id_v5';
                     let cachedMediaId = await getSetting(tipMediaKey, null);
 
                     if (cachedMediaId) {

@@ -303,9 +303,9 @@ async function runMigration() {
         // Clean out legacy invalid media IDs if present
         await pool.query("DELETE FROM system_settings WHERE key LIKE 'welcome_tip_%'");
 
-        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_v4' LIMIT 1");
+        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_v5' LIMIT 1");
         if (mediaCheck.rows.length === 0) {
-            console.log('🎙️ Generating fresh Hinglish MP3 welcome tip voice notes and uploading to Meta...');
+            console.log('🎙️ Generating fresh short Hinglish MP3 welcome tip voice notes and uploading to Meta...');
             try {
                 const SARVAM_KEY = process.env.SARVAM_API_KEY || 'sk_o2r2qvi7_wO6CZZ4vWWlGkgZ45SPwCBrJ';
                 const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || 'EAAWJurSGNC8BR6Db6DCyhaP5v1vDkdEyv3PkhR2mj4ycI8lQsvBUl6NbaGW8r4rZC5g4ZBGdFK8LoH8d2sds3WVYAiowCDAR3tEc1sHhW1ZAbXYnaXyZBDtuJnkjPQqUe5SNcoRgecHfcMJTKF7Ee4rgK4SK2gM1fv44NqAY4ZAEq3JuJjdnxSztTVZBL91nL8PwZDZD';
@@ -316,12 +316,12 @@ async function runMigration() {
                     const FormData = require('form-data');
                     const variants = [
                         {
-                            settingsKey: 'welcome_tip_new_media_id_v4',
-                            text: "Welcome to Mera Kirana! Aap humare dairy products dekhne ke liye neeche View Products button par tap kar sakte hain. Ya phir aap simply ek voice note bhej kar order kar sakte hain — for example, keh sakte hain: 2 packets of curd and 1 litre milk. Hum use aapke cart mein automatically add kar denge!"
+                            settingsKey: 'welcome_tip_new_media_id_v5',
+                            text: "Aap humare dairy products dekhne ke liye neeche View Products button par tap kar sakte hain. Ya phir simply ek voice note bhej kar order kar sakte hain — jaise keh sakte hain: 2 packet dahi aur 1 litre milk, Model Town, shaam 3 baje bhejwa dena. Hum use aapke cart mein automatically add kar denge!"
                         },
                         {
-                            settingsKey: 'welcome_tip_repeat_media_id_v4',
-                            text: "Welcome back to Mera Kirana! Aap ek tap se apna last order repeat kar sakte hain, products browse kar sakte hain, ya direct voice note bhej kar order kar sakte hain!"
+                            settingsKey: 'welcome_tip_repeat_media_id_v5',
+                            text: "Aap ek tap se apna last order repeat kar sakte hain, products browse kar sakte hain, ya voice note bhej kar direct order kar sakte hain!"
                         }
                     ];
 
