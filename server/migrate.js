@@ -299,6 +299,82 @@ async function runMigration() {
             console.log(`✅ Backfilled meta_product_retailer_id for ${backfillRes.rowCount} product variants`);
         }
 
+        // 18. Auto-seed welcome tip voice note media IDs if missing
+        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_EN' LIMIT 1");
+        if (mediaCheck.rows.length === 0) {
+            console.log('🎙️ Welcome tip voice notes missing in DB. Auto-generating via Sarvam TTS and uploading to Meta...');
+            try {
+                const SARVAM_KEY = process.env.SARVAM_API_KEY;
+                const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+                const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+
+                if (SARVAM_KEY && WA_TOKEN && WA_PHONE_ID) {
+                    const axios = require('axios');
+                    const FormData = require('form-data');
+                    const TIPS = {
+                        TIP_NEW: {
+                            EN: "Welcome to Mera Kirana! You can browse our dairy products by tapping View Products below. Or, simply send a voice note telling us what you need — for example, say '2 packets of curd and 1 litre milk'. We'll add it to your cart automatically!",
+                            HI: "मेरा किराना में आपका स्वागत है! नीचे 'उत्पाद देखें' बटन दबाकर हमारे डेयरी प्रोडक्ट्स देखें। या, बस एक वॉइस नोट भेजें — जैसे '2 पैकेट दही और 1 लीटर दूध'। हम इसे अपने आप आपकी कार्ट में जोड़ देंगे!",
+                            MR: "मेरा किराना मध्ये आपले स्वागत आहे! खाली 'उत्पादने पहा' बटण दाबून आमची डेअरी उत्पादने पहा. किंवा, फक्त एक व्हॉइस नोट पाठवा — जसे '2 पॅकेट दही आणि 1 लिटर दूध'. आम्ही ते आपोआप तुमच्या कार्टमध्ये जोडू!"
+                        },
+                        TIP_REPEAT: {
+                            EN: "Welcome back to Mera Kirana! You can repeat your last order with one tap, browse products, or send a voice note to order directly.",
+                            HI: "मेरा किराना में फिर से आपका स्वागत है! आप एक टैप से अपना पिछला ऑर्डर दोहरा सकते हैं, प्रोडक्ट्स देख सकते हैं, या सीधे वॉइस नोट भेजकर ऑर्डर कर सकते हैं।",
+                            MR: "मेरा किराना मध्ये पुन्हा स्वागत! तुम्ही एका टॅपने तुमची शेवटची ऑर्डर पुन्हा करू शकता, उत्पादने पाहू शकता, किंवा थेट व्हॉइस नोट पाठवून ऑर्डर करू शकता।"
+                        }
+                    };
+                    const LANG_MAP = { EN: 'en-IN', HI: 'hi-IN', MR: 'mr-IN' };
+                    const variants = [
+                        { settingsKey: 'welcome_tip_new_media_id_EN', type: 'TIP_NEW', lang: 'EN' },
+                        { settingsKey: 'welcome_tip_new_media_id_HI', type: 'TIP_NEW', lang: 'HI' },
+                        { settingsKey: 'welcome_tip_new_media_id_MR', type: 'TIP_NEW', lang: 'MR' },
+                        { settingsKey: 'welcome_tip_repeat_media_id_EN', type: 'TIP_REPEAT', lang: 'EN' },
+                        { settingsKey: 'welcome_tip_repeat_media_id_HI', type: 'TIP_REPEAT', lang: 'HI' },
+                        { settingsKey: 'welcome_tip_repeat_media_id_MR', type: 'TIP_REPEAT', lang: 'MR' }
+                    ];
+
+                    for (const v of variants) {
+                        const text = TIPS[v.type][v.lang];
+                        const ttsRes = await axios.post('https://api.sarvam.ai/text-to-speech', {
+                            text,
+                            target_language_code: LANG_MAP[v.lang],
+                            speaker: 'ritu',
+                            model: 'bulbul:v3'
+                        }, {
+                            headers: { 'api-subscription-key': SARVAM_KEY, 'Content-Type': 'application/json' },
+                            timeout: 30000
+                        });
+
+                        if (ttsRes.data?.audios?.[0]) {
+                            const audioBuffer = Buffer.from(ttsRes.data.audios[0], 'base64');
+                            const formData = new FormData();
+                            formData.append('messaging_product', 'whatsapp');
+                            formData.append('file', audioBuffer, { filename: 'tip.wav', contentType: 'audio/wav' });
+                            formData.append('type', 'audio/wav');
+
+                            const uploadRes = await axios.post(
+                                `https://graph.facebook.com/v17.0/${WA_PHONE_ID}/media`,
+                                formData,
+                                { headers: { 'Authorization': `Bearer ${WA_TOKEN}`, ...formData.getHeaders() } }
+                            );
+
+                            const mediaId = uploadRes.data.id;
+                            await pool.query(
+                                `INSERT INTO system_settings (key, value) VALUES ($1, $2)
+                                 ON CONFLICT (key) DO UPDATE SET value = $2`,
+                                [v.settingsKey, JSON.stringify(mediaId)]
+                            );
+                            console.log(`  ✅ Auto-seeded welcome audio media ID for ${v.settingsKey}`);
+                        }
+                    }
+                } else {
+                    console.warn('⚠️ Missing API keys for auto-seeding welcome audio.');
+                }
+            } catch (autoErr) {
+                console.error('⚠️ Auto-seeding welcome audio failed:', autoErr.message);
+            }
+        }
+
         console.log('🎉 Database Migration Successful!');
     } catch (err) {
         console.error('❌ Migration Failed:', err.message);
