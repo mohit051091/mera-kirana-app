@@ -303,7 +303,7 @@ async function runMigration() {
         // Clean out legacy invalid media IDs if present
         await pool.query("DELETE FROM system_settings WHERE key LIKE 'welcome_tip_%'");
 
-        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_v3' LIMIT 1");
+        const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_v4' LIMIT 1");
         if (mediaCheck.rows.length === 0) {
             console.log('🎙️ Generating fresh Hinglish MP3 welcome tip voice notes and uploading to Meta...');
             try {
@@ -316,23 +316,23 @@ async function runMigration() {
                     const FormData = require('form-data');
                     const variants = [
                         {
-                            settingsKey: 'welcome_tip_new_media_id_v3',
+                            settingsKey: 'welcome_tip_new_media_id_v4',
                             text: "Welcome to Mera Kirana! Aap humare dairy products dekhne ke liye neeche View Products button par tap kar sakte hain. Ya phir aap simply ek voice note bhej kar order kar sakte hain — for example, keh sakte hain: 2 packets of curd and 1 litre milk. Hum use aapke cart mein automatically add kar denge!"
                         },
                         {
-                            settingsKey: 'welcome_tip_repeat_media_id_v3',
+                            settingsKey: 'welcome_tip_repeat_media_id_v4',
                             text: "Welcome back to Mera Kirana! Aap ek tap se apna last order repeat kar sakte hain, products browse kar sakte hain, ya direct voice note bhej kar order kar sakte hain!"
                         }
                     ];
 
                     for (const v of variants) {
-                        console.log(`  → Synthesizing Sarvam TTS Hinglish audio for ${v.settingsKey}...`);
+                        console.log(`  → Synthesizing Sarvam TTS Hinglish MP3 audio for ${v.settingsKey}...`);
                         const ttsRes = await axios.post('https://api.sarvam.ai/text-to-speech', {
                             text: v.text,
                             target_language_code: 'hi-IN',
                             speaker: 'ritu',
                             model: 'bulbul:v3',
-                            audio_encoding: 'mp3'
+                            output_audio_codec: 'mp3'
                         }, {
                             headers: { 'api-subscription-key': SARVAM_KEY, 'Content-Type': 'application/json' },
                             timeout: 30000
