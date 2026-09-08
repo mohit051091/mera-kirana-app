@@ -305,7 +305,10 @@ async function runMigration() {
 
         // 17b. Canonicalize split-brain columns + idempotency constraints
         await pool.query(`ALTER TABLE sales_commissions ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'PENDING';`);
-        await pool.query(`ALTER TABLE payment_logs ADD CONSTRAINT IF NOT EXISTS payment_logs_upi_txn_unique UNIQUE (upi_transaction_id);`);
+        const uniqChk = await pool.query(`SELECT 1 FROM pg_constraint WHERE conname = 'payment_logs_upi_txn_unique'`);
+        if (!uniqChk.rows.length) {
+            await pool.query(`ALTER TABLE payment_logs ADD CONSTRAINT payment_logs_upi_txn_unique UNIQUE (upi_transaction_id);`);
+        }
         await pool.query(`UPDATE carts SET updated_at = created_at WHERE updated_at IS NULL;`);
         // 17c. Owner catalog manager: per-variant order-quantity controls
         await pool.query(`ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS min_quantity INTEGER DEFAULT 1;`);
