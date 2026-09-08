@@ -8,14 +8,25 @@ const whatsappService = require('../services/whatsapp');
 router.post('/', async (req, res) => {
     try {
         const signature = req.headers['x-razorpay-signature'];
-        const secret = process.env.RAZORPAY_WEBHOOK_SECRET || 'merakirana_rzp_webhook_123';
-        
-        // 1. Signature Check
+        const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        if (!secret) {
+            console.error('FATAL: RAZORPAY_WEBHOOK_SECRET env var is required.');
+            return res.status(500).json({ error: 'Payment webhook not configured' });
+        }
+        if (!signature) {
+            return res.status(400).json({ error: 'Missing signature' });
+        }
+
+        // NOTE: Proper HMAC requires express.raw() body. JSON.stringify is an approximation;
+        // keep until route is switched to raw-body parsing. See docs/incidents.md.
         const shasum = crypto.createHmac('sha256', secret);
         shasum.update(JSON.stringify(req.body));
         const digest = shasum.digest('hex');
-        
-        if (digest !== signature && process.env.NODE_ENV !== 'test') {
+
+        const a = Buffer.from(digest, 'utf8');
+        const b = Buffer.from(String(signature), 'utf8');
+        const valid = a.length === b.length && crypto.timingSafeEqual(a, b);
+        if (!valid) {
             console.error('❌ Razorpay signature verification failed.');
             return res.status(400).json({ error: 'Signature mismatch' });
         }
@@ -26,6 +37,10 @@ router.post('/', async (req, res) => {
             const orderId = entity?.notes?.order_id || entity?.reference_id;
             const amount = entity?.amount ? (entity.amount / 100) : 0; // convert paise to INR
             const upiTxnId = entity?.acquirer_data?.rrn || entity?.id;
+            if (!upiTxnId) {
+                console.warn('⚠️ Webhook missing txn/payment id; rejecting to preserve idempotency.');
+                return res.status(400).json({ error: 'Missing transaction id' });
+            }
 
             if (!orderId) {
                 console.warn('⚠️ Webhook received but no order_id found in notes/reference_id.');
@@ -51,12 +66,14 @@ router.post('/', async (req, res) => {
             const dbOrder = orderCheck.rows[0];
             const orderTotal = parseFloat(dbOrder.total_amount);
 
-            // Validate amount (allow minor rounding differences)
-            if (Math.abs(orderTotal - amount) > 0.05) {
-                console.error(`❌ Payment amount mismatch! Paid: ₹${amount}, Expected: ₹${orderTotal}`);
+            // Validate amount with exact paise comparison (no float tolerance abuse)
+            const expectedPaise = Math.round(orderTotal * 100);
+            const paidPaise = entity?.amount;
+            if (!Number.isInteger(paidPaise) || paidPaise !== expectedPaise) {
+                console.error(`❌ Payment amount mismatch! Paid paise: ${paidPaise}, Expected: ${expectedPaise}`);
                 await pool.query(
                     'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5)',
-                    [orderId, upiTxnId, amount, 'AMOUNT_MISMATCH', JSON.stringify(req.body)]
+                    [orderId, upiTxnId, amount, 'AMOUNT_MISMATCH', JSON.stringify(req.body).slice(0, 10000)]
                 );
                 return res.status(400).json({ error: 'Amount mismatch' });
             }
@@ -69,10 +86,10 @@ router.post('/', async (req, res) => {
                 RETURNING order_id, readable_order_id, customer_id
             `, [orderId]);
 
-            // 4. Log the transaction details
+            // 4. Log the transaction details (atomic idempotency: UNIQUE(upi_transaction_id) required; ON CONFLICT = dupe)
             await pool.query(
-                'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5)',
-                [orderId, upiTxnId, amount, 'SUCCESS', JSON.stringify(req.body)]
+                'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (upi_transaction_id) DO NOTHING',
+                [orderId, upiTxnId, amount, 'SUCCESS', JSON.stringify(req.body).slice(0, 10000)]
             );
 
             if (updateRes.rows.length > 0) {
@@ -88,6 +105,16 @@ router.post('/', async (req, res) => {
                 }
             } else {
                 console.log(`⚠️ Order ${orderId} status was not updated (might already be confirmed).`);
+            }
+        } else if (event === 'payment.failed' || event === 'refund.processed' || event === 'refund.created') {
+            const entity = req.body.payload?.payment?.entity || req.body.payload?.refund?.entity || {};
+            const orderId = entity?.notes?.order_id || entity?.reference_id;
+            console.warn(`⚠️ Payment failure/refund event ${event} for order ${orderId}; leaving status for manual review.`);
+            if (orderId) {
+                await pool.query(
+                    'INSERT INTO payment_logs (order_id, upi_transaction_id, amount, status, raw_response) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (upi_transaction_id) DO NOTHING',
+                    [orderId, String(entity?.id || `evt-${Date.now()}`), entity?.amount ? entity.amount / 100 : 0, String(event).toUpperCase().slice(0, 50), JSON.stringify(req.body).slice(0, 10000)]
+                );
             }
         }
 

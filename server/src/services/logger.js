@@ -9,6 +9,29 @@ if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true });
 }
 
+function sanitizeAxiosError(error) {
+    // Never log Authorization headers or tokens (they leaked into railway logs before)
+    if (error && error.config) {
+        const cfg = { ...error.config };
+        if (cfg.headers) {
+            const h = { ...cfg.headers };
+            for (const k of Object.keys(h)) {
+                if (/auth|token|secret|key/i.test(k)) h[k] = '[REDACTED]';
+            }
+            cfg.headers = h;
+        }
+        // Keep only safe bits: URL, method, status — drop full raw dumps
+        return {
+            message: error.message,
+            url: cfg.url,
+            method: cfg.method,
+            status: error.response?.status,
+            responseData: error.response?.data,
+        };
+    }
+    return error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) };
+}
+
 function logError(error, context = '') {
     const timestamp = new Date().toISOString();
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -22,8 +45,8 @@ function logError(error, context = '') {
         }
     });
     
-    // Also print to stdout/stderr for dev convenience
-    console.error(`[${context}]`, error);
+    // Also print to stdout/stderr for dev convenience (sanitized — no tokens)
+    console.error(`[${context}]`, sanitizeAxiosError(error));
 }
 
 module.exports = {

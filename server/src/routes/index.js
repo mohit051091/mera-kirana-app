@@ -3,7 +3,10 @@ const router = express.Router();
 const db = require('../database/db');
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'merakirana_jwt_secret_2026_super_secure';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET env var is required (no fallback allowed).');
+}
 
 // Placeholder route imports
 const authRoutes = require('./auth');
@@ -36,10 +39,6 @@ router.use('/webhook/payments', paymentsRoutes);
 
 // 2. Administrative Authentication Middleware
 const verifyAdminAuth = (req, res, next) => {
-    // Treat test environment requests as bypassable or mockable
-    if (process.env.NODE_ENV === 'test') {
-        return next();
-    }
     const authHeader = req.headers['authorization'];
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized: Missing administrative authorization token.' });
@@ -47,7 +46,7 @@ const verifyAdminAuth = (req, res, next) => {
     
     const token = authHeader.split(' ')[1];
     try {
-        const decoded = jwt.verify(token, JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET, { issuer: 'mera-kirana' });
         req.admin = decoded;
         next();
     } catch (err) {

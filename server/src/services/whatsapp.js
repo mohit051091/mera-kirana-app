@@ -2,13 +2,13 @@ const axios = require('axios');
 require('dotenv').config();
 const { logError } = require('./logger');
 
-const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
-const TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-const WHATSAPP_API_URL = `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_ID}/messages`;
-
-// Validate environment variables on startup
-if (!WHATSAPP_PHONE_ID || !TOKEN) {
-    logError('CRITICAL: Missing WhatsApp credentials!', 'whatsapp_init');
+function getApiConfig() {
+    const phoneId = process.env.WHATSAPP_PHONE_ID;
+    const token = process.env.WHATSAPP_ACCESS_TOKEN;
+    if (!phoneId || !token) {
+        throw new Error('WhatsApp credentials missing (WHATSAPP_PHONE_ID / WHATSAPP_ACCESS_TOKEN)');
+    }
+    return { url: `https://graph.facebook.com/v17.0/${phoneId}/messages`, token };
 }
 
 const logOutgoingMessage = async (to, data, messageId) => {
@@ -89,10 +89,12 @@ const sendMessage = async (data) => {
 
     const postWithRetry = async (retries = 3, delay = 1000) => {
         try {
-            return await axios.post(WHATSAPP_API_URL, data, {
+            const { url, token } = getApiConfig();
+            return await axios.post(url, data, {
+                timeout: 10000,
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${TOKEN}`
+                    'Authorization': `Bearer ${token}`
                 }
             });
         } catch (error) {
@@ -111,7 +113,7 @@ const sendMessage = async (data) => {
         const resData = response.data;
         const actualMsgId = resData?.messages?.[0]?.id;
         if (actualMsgId && data.status !== 'read') {
-            logOutgoingMessage(data.to, data, actualMsgId);
+            await logOutgoingMessage(data.to, data, actualMsgId).catch(() => {});
         }
         return resData;
     } catch (error) {
@@ -130,25 +132,34 @@ const sendText = (to, text) => {
 };
 
 const sendButtons = (to, text, buttons) => {
-    // buttons = [{ id: 'btn_1', title: 'Option 1' }]
+    // Meta limits: max 3 buttons, title ≤ 20 chars
+    const safe = (buttons || []).slice(0, 3).map(btn => ({
+        type: 'reply',
+        reply: { id: String(btn.id), title: String(btn.title || '').slice(0, 20) }
+    }));
     return sendMessage({
         messaging_product: 'whatsapp',
         to: to,
         type: 'interactive',
         interactive: {
             type: 'button',
-            body: { text: text },
+            body: { text: String(text || '').slice(0, 1024) },
             action: {
-                buttons: buttons.map(btn => ({
-                    type: 'reply',
-                    reply: { id: btn.id, title: btn.title }
-                }))
+                buttons: safe
             }
         }
     });
 };
 
 const sendList = (to, header, body, buttonText, sections) => {
+    const safeSections = (sections || []).map(s => ({
+        title: String(s.title || '').slice(0, 24),
+        rows: (s.rows || []).slice(0, 10).map(r => ({
+            id: String(r.id),
+            title: String(r.title || '').slice(0, 24),
+            description: r.description ? String(r.description).slice(0, 72) : undefined
+        }))
+    }));
     return sendMessage({
         messaging_product: 'whatsapp',
         to: to,
@@ -160,7 +171,7 @@ const sendList = (to, header, body, buttonText, sections) => {
             footer: { text: 'Select an option' },
             action: {
                 button: buttonText,
-                sections: sections
+                sections: safeSections
                 // sections = [{ title: 'Category', rows: [{ id: '1', title: 'Item', description: 'desc' }] }]
             }
         }

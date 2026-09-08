@@ -1,352 +1,307 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import api from '../../lib/api';
-import { Plus, Package, Save, Eye, EyeOff, Edit, Trash2, X } from 'lucide-react';
+import { Plus, Package, Save, Pencil, Trash2, X, RefreshCw, Download, Upload, Check, AlertTriangle, Milk } from 'lucide-react';
+
+const WEIGHT_PRESETS = ['100 gm', '200 gm', '250 gm', '500 gm', '1 kg', '2 kg', '5 kg', 'Custom…'];
+const QTY_STEPS = [1, 2, 5];
+
+const emptyVariant = () => ({ weight: '500 gm', customWeight: '', price: '', stock: 100, min_qty: 1, max_qty: 20, qty_step: 1, sku: '', retailer_id: '', is_active: true });
+
+function SyncBadge({ retailerId }) {
+    if (retailerId) return <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5"><Check size={12} /> Synced</span>;
+    return <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5"><AlertTriangle size={12} /> Pending push</span>;
+}
 
 export default function ProductsPage() {
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [query, setQuery] = useState('');
+    const [filter, setFilter] = useState('all');
     const [showForm, setShowForm] = useState(false);
-    const [userRole, setUserRole] = useState('Owner'); // Toggle 'Owner' or 'Manager' for CP security check
+    const [editingId, setEditingId] = useState(null);
+    const [draftVariants, setDraftVariants] = useState([]);
+    const [newProduct, setNewProduct] = useState({ base_name: '', description: '', variants: [emptyVariant()] });
+    const [busy, setBusy] = useState('');
     const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
-    
-    // Edit Modal State
-    const [editingProduct, setEditingProduct] = useState(null);
 
-    // New Product Form State
-    const [newProduct, setNewProduct] = useState({
-        base_name: '',
-        description: '',
-        price: '', // Selling price
-        cost_price: '', // Cost price (Owner-only)
-        stock: ''
-    });
-
-    useEffect(() => {
-        fetchProducts();
-    }, []);
+    useEffect(() => { fetchProducts(); }, []);
 
     const showStatus = (type, text) => {
         setStatusMsg({ type, text });
-        setTimeout(() => setStatusMsg({ type: '', text: '' }), 4000);
+        setTimeout(() => setStatusMsg({ type: '', text: '' }), 4500);
     };
 
     const fetchProducts = async () => {
         try {
             const res = await api.get('/products');
             setProducts(res.data);
-        } catch (err) {
-            console.error("Failed to load products", err);
-            showStatus('error', 'Failed to fetch catalog list.');
-        } finally {
-            setLoading(false);
-        }
+        } catch { showStatus('error', 'Failed to fetch catalog.'); }
+        finally { setLoading(false); }
     };
+
+    const stats = useMemo(() => {
+        const all = products.flatMap(p => (p.variants || []).map(v => ({ ...v, product: p })));
+        return {
+            products: products.length,
+            variants: all.length,
+            outOfStock: all.filter(v => (v.stock ?? v.stock_quantity ?? 0) <= 0).length,
+            pending: all.filter(v => !(v.retailer_id || v.meta_product_retailer_id)).length,
+        };
+    }, [products]);
+
+    const filtered = useMemo(() => {
+        return products.filter(p => {
+            if (query && !(p.base_name || '').toLowerCase().includes(query.toLowerCase())) return false;
+            const vs = p.variants || [];
+            if (filter === 'out') return vs.some(v => (v.stock ?? v.stock_quantity ?? 0) <= 0);
+            if (filter === 'pending') return vs.some(v => !(v.retailer_id || v.meta_product_retailer_id));
+            if (filter === 'inactive') return vs.some(v => v.is_active === false);
+            return true;
+        });
+    }, [products, query, filter]);
+
+    const weightValue = (v) => (v.weight && !WEIGHT_PRESETS.includes(v.weight) ? 'Custom…' : (v.weight || '500 gm'));
 
     const handleCreate = async (e) => {
         e.preventDefault();
+        setBusy('create');
         try {
             const payload = {
-                base_name: newProduct.base_name,
-                description: newProduct.description,
-                variants: [
-                    {
-                        weight: "Standard",
-                        price: parseFloat(newProduct.price),
-                        cost_price: userRole === 'Owner' && newProduct.cost_price ? parseFloat(newProduct.cost_price) : 0,
-                        stock: parseInt(newProduct.stock) || 0
-                    }
-                ]
+                base_name: newProduct.base_name, description: newProduct.description,
+                variants: newProduct.variants.map(v => ({
+                    weight: v.weight === 'Custom…' ? (v.customWeight || 'Standard') : v.weight,
+                    price: parseFloat(v.price), stock: parseInt(v.stock) || 0,
+                    min_qty: v.min_qty, max_qty: v.max_qty, qty_step: v.qty_step, sku: v.sku || undefined,
+                })),
             };
             await api.post('/products', payload);
             setShowForm(false);
-            setNewProduct({ base_name: '', description: '', price: '', cost_price: '', stock: '' });
+            setNewProduct({ base_name: '', description: '', variants: [emptyVariant()] });
             fetchProducts();
-            showStatus('success', 'Product created successfully!');
-        } catch (err) {
-            showStatus('error', err.response?.data?.error || 'Failed to create product.');
-        }
+            showStatus('success', 'Product created — pushing to Meta in background.');
+        } catch (err) { showStatus('error', err.response?.data?.error || 'Create failed.'); }
+        finally { setBusy(''); }
     };
 
-    const handleUpdate = async (e) => {
-        e.preventDefault();
+    const startEdit = (p) => {
+        setEditingId(p.product_id);
+        setDraftVariants((p.variants || []).map(v => ({
+            variant_id: v.variant_id, weight: v.weight || 'Standard', customWeight: '',
+            price: v.price ?? '', stock: v.stock ?? v.stock_quantity ?? 0,
+            min_qty: v.min_qty ?? v.min_quantity ?? 1, max_qty: v.max_qty ?? v.max_quantity ?? 20,
+            qty_step: v.qty_step ?? v.quantity_step ?? 1,
+            sku: v.sku || v.sku_code || '', retailer_id: v.retailer_id || v.meta_product_retailer_id || '',
+            is_active: v.is_active !== false,
+        })));
+    };
+
+    const saveEdit = async (p) => {
+        setBusy(p.product_id);
         try {
-            const variantObj = editingProduct.variants[0] || {};
-            const payload = {
-                base_name: editingProduct.base_name,
-                description: editingProduct.description,
-                variants: [
-                    {
-                        variant_id: variantObj.variant_id,
-                        weight: variantObj.weight || "Standard",
-                        price: parseFloat(editingProduct.price),
-                        cost_price: userRole === 'Owner' && editingProduct.cost_price ? parseFloat(editingProduct.cost_price) : variantObj.cost_price,
-                        stock: parseInt(editingProduct.stock) || 0,
-                        sku: variantObj.sku
-                    }
-                ]
-            };
-            await api.put(`/products/${editingProduct.product_id}`, payload);
-            setEditingProduct(null);
+            await api.put(`/products/${p.product_id}`, {
+                base_name: p.base_name, description: p.description,
+                variants: draftVariants.map(v => ({
+                    variant_id: v.variant_id,
+                    weight: v.weight === 'Custom…' ? (v.customWeight || 'Standard') : v.weight,
+                    price: parseFloat(v.price), stock: parseInt(v.stock) || 0,
+                    min_qty: v.min_qty, max_qty: v.max_qty, qty_step: v.qty_step,
+                    sku: v.sku, retailer_id: v.retailer_id, is_active: v.is_active,
+                })),
+            });
+            setEditingId(null);
             fetchProducts();
-            showStatus('success', 'Product updated successfully!');
-        } catch (err) {
-            showStatus('error', err.response?.data?.error || 'Failed to update product.');
-        }
+            showStatus('success', 'Saved — Meta push queued.');
+        } catch (err) { showStatus('error', err.response?.data?.error || 'Save failed.'); }
+        finally { setBusy(''); }
     };
 
-    const handleDeactivate = async (id) => {
-        if (!confirm('Are you sure you want to deactivate this product from the catalog?')) return;
+    const toggleVariant = async (variantId, is_active) => {
         try {
-            await api.delete(`/products/${id}`);
+            await api.patch(`/products/variants/${variantId}`, { is_active });
             fetchProducts();
-            showStatus('success', 'Product deactivated.');
-        } catch (err) {
-            showStatus('error', 'Failed to deactivate product.');
-        }
+            showStatus('success', is_active ? 'Variant enabled.' : 'Variant disabled + removed from Meta.');
+        } catch { showStatus('error', 'Toggle failed.'); }
     };
 
-    const startEditing = (p) => {
-        const primaryVariant = p.variants[0] || {};
-        setEditingProduct({
-            ...p,
-            price: primaryVariant.price || '',
-            cost_price: primaryVariant.cost_price || '',
-            stock: primaryVariant.stock || 0
-        });
+    const pushProduct = async (id) => {
+        setBusy('push' + id);
+        try {
+            const r = await api.post(`/products/${id}/push`);
+            showStatus('success', r.data.message);
+            fetchProducts();
+        } catch (err) { showStatus('error', err.response?.data?.error || 'Push failed — check META token.'); }
+        finally { setBusy(''); }
     };
+
+    const importCatalog = async () => {
+        if (!confirm('Pull all Meta catalog items into the dashboard?')) return;
+        setBusy('import');
+        try {
+            const r = await api.post('/products/import-catalog');
+            showStatus('success', r.data.message);
+            fetchProducts();
+        } catch (err) { showStatus('error', err.response?.data?.error || 'Import failed — check META token.'); }
+        finally { setBusy(''); }
+    };
+
+    if (loading) return <div className="p-10 text-sm text-stone-500">Loading catalog…</div>;
 
     return (
-        <div className="p-8 max-w-7xl mx-auto space-y-8 animate-in fade-in duration-300">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b pb-5">
-                <div>
-                    <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight flex items-center gap-3">
-                        <Package size={30} className="text-green-600" /> Product Catalog
-                    </h1>
-                    <p className="text-gray-500 mt-1">Manage dairy categories, variants, pricing, and stock limits.</p>
-                </div>
-                
-                <div className="flex items-center gap-3 flex-wrap">
-                    {/* Role selector dropdown to test CP restriction */}
-                    <div className="flex items-center gap-2 bg-white p-2 rounded-xl border text-sm shadow-sm">
-                        <span className="font-semibold text-gray-500 pl-1">Role:</span>
-                        <select 
-                            value={userRole} 
-                            onChange={e => setUserRole(e.target.value)}
-                            className="bg-transparent border-0 font-bold text-gray-800 outline-none cursor-pointer"
-                        >
-                            <option value="Owner">👑 Owner (Show CP)</option>
-                            <option value="Manager">🧑‍💼 Manager (Hide CP)</option>
-                        </select>
+        <div className="p-5 md:p-8 max-w-7xl mx-auto space-y-6">
+            <div className="rounded-3xl bg-stone-950 text-white p-6 md:p-8 relative overflow-hidden">
+                <div className="absolute -right-10 -top-10 w-56 h-56 rounded-full bg-emerald-500/20 blur-2xl" />
+                <div className="absolute right-20 bottom-0 w-32 h-32 rounded-full bg-emerald-400/10 blur-xl" />
+                <div className="relative flex flex-col md:flex-row md:items-end gap-4">
+                    <div className="flex-1">
+                        <p className="text-[11px] font-bold tracking-[0.2em] uppercase text-emerald-300">Catalog manager</p>
+                        <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight mt-1 flex items-center gap-2"><Milk size={26} className="text-emerald-300" /> Products & Variants</h1>
+                        <p className="text-stone-300 text-sm mt-1">Owner edits here flow to the shop database instantly, and to WhatsApp catalog in the background.</p>
+                        <div className="flex gap-2.5 mt-4 flex-wrap">
+                            {[['Products', stats.products], ['Variants', stats.variants], ['Out of stock', stats.outOfStock], ['Pending push', stats.pending]].map(([l, n]) => (
+                                <div key={l} className="rounded-2xl bg-white/5 border border-white/10 px-3.5 py-2 min-w-[104px]">
+                                    <p className="text-xl font-extrabold leading-none">{n}</p>
+                                    <p className="text-[11px] text-stone-400 font-semibold mt-1">{l}</p>
+                                </div>
+                            ))}
+                        </div>
                     </div>
-
-                    <button
-                        onClick={() => setShowForm(!showForm)}
-                        className="bg-green-600 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 hover:bg-green-700 active:scale-95 transition-all shadow-md font-semibold text-sm"
-                    >
-                        <Plus size={18} /> Add Product
-                    </button>
+                    <div className="flex gap-2 flex-wrap">
+                        <button onClick={importCatalog} disabled={busy === 'import'} className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-sm font-bold flex items-center gap-2 transition active:scale-95 disabled:opacity-50">
+                            <Download size={16} /> {busy === 'import' ? 'Importing…' : 'Import from Meta'}
+                        </button>
+                        <button onClick={() => setShowForm(!showForm)} className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-sm font-bold flex items-center gap-2 transition active:scale-95 shadow-lg shadow-emerald-900/40">
+                            {showForm ? <X size={16} /> : <Plus size={16} />} {showForm ? 'Close' : 'Add Product'}
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            {/* Status alerts */}
             {statusMsg.text && (
-                <div className={`p-4 rounded-xl text-sm font-semibold border ${
-                    statusMsg.type === 'success' 
-                    ? 'bg-green-50 text-green-700 border-green-100' 
-                    : 'bg-rose-50 text-rose-700 border-rose-100'
-                }`}>
-                    {statusMsg.text}
-                </div>
+                <div className={`p-4 rounded-2xl text-sm font-semibold border ${statusMsg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>{statusMsg.text}</div>
             )}
 
-            {/* Add Product Form */}
             {showForm && (
-                <div className="bg-white p-6 rounded-2xl shadow-md border border-gray-100 animate-in slide-in-from-top duration-300">
-                    <h2 className="text-lg font-bold text-gray-900 mb-4 pb-2 border-b">New Product Details</h2>
-                    <form onSubmit={handleCreate} className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-semibold text-gray-700 mb-1">Product Name</label>
-                            <input
-                                className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm bg-gray-50/20"
-                                placeholder="e.g. Fresh Paneer"
-                                value={newProduct.base_name}
-                                onChange={e => setNewProduct({ ...newProduct, base_name: e.target.value })}
-                                required
-                            />
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">Selling Price (₹)</label>
-                                <input
-                                    type="number"
-                                    className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm bg-gray-50/20"
-                                    placeholder="120"
-                                    value={newProduct.price}
-                                    onChange={e => setNewProduct({ ...newProduct, price: e.target.value })}
-                                    required
-                                />
-                            </div>
-                            
-                            {/* Cost Price: Show input strictly only for Owner role */}
-                            {userRole === 'Owner' ? (
-                                <div>
-                                    <label className="block text-sm font-semibold text-rose-600 mb-1 flex items-center gap-1">
-                                        Cost Price (₹) <span className="text-xs font-normal text-rose-400">(Owner Only)</span>
-                                    </label>
-                                    <input
-                                        type="number"
-                                        className="w-full border border-rose-200 bg-rose-50/10 p-3 rounded-xl outline-none focus:ring-2 focus:ring-rose-500 transition text-sm"
-                                        placeholder="80"
-                                        value={newProduct.cost_price}
-                                        onChange={e => setNewProduct({ ...newProduct, cost_price: e.target.value })}
-                                    />
-                                </div>
-                            ) : null}
-
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">Initial Stock</label>
-                                <input
-                                    type="number"
-                                    className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm bg-gray-50/20"
-                                    placeholder="100"
-                                    value={newProduct.stock}
-                                    onChange={e => setNewProduct({ ...newProduct, stock: e.target.value })}
-                                    required
-                                />
-                            </div>
-                        </div>
-                        <div className="flex justify-end gap-2 mt-4 pt-3 border-t">
-                            <button type="button" onClick={() => setShowForm(false)} className="px-5 py-2.5 rounded-xl text-gray-500 hover:bg-gray-50 font-medium transition text-sm">Cancel</button>
-                            <button type="submit" className="bg-green-600 text-white px-6 py-2.5 rounded-xl hover:bg-green-700 flex items-center gap-2 text-sm font-bold shadow active:scale-95 transition-all">
-                                <Save size={18} /> Save Product
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            )}
-
-            {/* Product List */}
-            {loading ? (
-                <div className="flex justify-center text-gray-500 font-semibold p-20">Loading catalog...</div>
-            ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {products.map(p => (
-                        <div key={p.product_id} className="bg-white border rounded-2xl p-6 shadow-sm hover:shadow-md transition duration-200 flex flex-col justify-between space-y-4">
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-start">
-                                    <h3 className="font-bold text-lg text-gray-900">{p.base_name}</h3>
-                                    <span className="bg-green-50 text-green-700 text-xs px-2.5 py-1 rounded-full font-bold border border-green-100">Active</span>
-                                </div>
-                                <div className="space-y-3 border-t pt-3">
-                                    {p.variants.map((v, i) => {
-                                        const margin = v.cost_price ? (v.price - v.cost_price) : 0;
-                                        const marginPercent = v.cost_price ? ((margin / v.cost_price) * 100).toFixed(0) : 0;
-                                        
-                                        return (
-                                            <div key={i} className="flex justify-between text-sm text-gray-600 border-b border-gray-100 pb-2 last:border-0 last:pb-0 items-center">
-                                                <span className="font-medium text-gray-500">{v.weight}</span>
-                                                <div className="text-right">
-                                                    <div className="font-bold text-gray-900">₹{v.price} <span className="text-xs font-normal text-gray-400">({v.stock} left)</span></div>
-                                                    
-                                                    {userRole === 'Owner' && v.cost_price ? (
-                                                        <div className="text-[11px] text-rose-600 font-bold mt-0.5">
-                                                            CP: ₹{v.cost_price} \| Mg: {marginPercent}% (+₹{margin.toFixed(0)})
-                                                        </div>
-                                                    ) : null}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                            
-                            <div className="flex gap-2 border-t pt-4">
-                                <button
-                                    onClick={() => startEditing(p)}
-                                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-gray-50 hover:bg-gray-100 text-gray-700 active:scale-95 transition"
-                                >
-                                    <Edit size={14} /> Edit Details
-                                </button>
-                                <button
-                                    onClick={() => handleDeactivate(p.product_id)}
-                                    className="px-3 py-2 rounded-xl text-xs font-bold bg-rose-50 hover:bg-rose-100 text-rose-600 active:scale-95 transition"
-                                    title="Deactivate Product"
-                                >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
+                <form onSubmit={handleCreate} className="rounded-3xl bg-white border border-stone-200 shadow-xl shadow-stone-200/50 p-5 md:p-6 space-y-4">
+                    <h2 className="font-extrabold">New product</h2>
+                    <div className="grid md:grid-cols-2 gap-3">
+                        <input className="border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-stone-50/50" placeholder="Product name — e.g. Fresh Paneer" value={newProduct.base_name} onChange={e => setNewProduct({ ...newProduct, base_name: e.target.value })} required />
+                        <input className="border border-stone-200 rounded-xl px-3.5 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-stone-50/50" placeholder="Description (optional)" value={newProduct.description} onChange={e => setNewProduct({ ...newProduct, description: e.target.value })} />
+                    </div>
+                    {newProduct.variants.map((v, i) => (
+                        <div key={i} className="rounded-2xl bg-stone-50 border border-stone-200 p-3.5 grid grid-cols-2 md:grid-cols-7 gap-2.5 items-end">
+                            <label className="text-xs font-bold text-stone-500 col-span-2 md:col-span-2">Weight
+                                <select value={v.weight} onChange={e => { const c = [...newProduct.variants]; c[i].weight = e.target.value; setNewProduct({ ...newProduct, variants: c }); }} className="mt-1 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-emerald-500">
+                                    {WEIGHT_PRESETS.map(w => <option key={w}>{w}</option>)}
+                                </select>
+                                {v.weight === 'Custom…' && <input value={v.customWeight} onChange={e => { const c = [...newProduct.variants]; c[i].customWeight = e.target.value; setNewProduct({ ...newProduct, variants: c }); }} placeholder="e.g. 750 gm" className="mt-1.5 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white" />}
+                            </label>
+                            <label className="text-xs font-bold text-stone-500">Price ₹<input type="number" min="1" required value={v.price} onChange={e => { const c = [...newProduct.variants]; c[i].price = e.target.value; setNewProduct({ ...newProduct, variants: c }); }} className="mt-1 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white" /></label>
+                            <label className="text-xs font-bold text-stone-500">Stock<input type="number" min="0" value={v.stock} onChange={e => { const c = [...newProduct.variants]; c[i].stock = e.target.value; setNewProduct({ ...newProduct, variants: c }); }} className="mt-1 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white" /></label>
+                            <label className="text-xs font-bold text-stone-500">Min–Max<input className="mt-1 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white" value={`${v.min_qty}-${v.max_qty}`} onChange={e => { const m = e.target.value.split('-'); const c = [...newProduct.variants]; c[i].min_qty = m[0]; c[i].max_qty = m[1]; setNewProduct({ ...newProduct, variants: c }); }} placeholder="1-20" /></label>
+                            <label className="text-xs font-bold text-stone-500">Step<select value={v.qty_step} onChange={e => { const c = [...newProduct.variants]; c[i].qty_step = e.target.value; setNewProduct({ ...newProduct, variants: c }); }} className="mt-1 w-full border border-stone-200 rounded-xl px-2.5 py-2 text-sm bg-white">{QTY_STEPS.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+                            <button type="button" onClick={() => setNewProduct({ ...newProduct, variants: newProduct.variants.filter((_, j) => j !== i) })} className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 justify-self-end"><Trash2 size={16} /></button>
                         </div>
                     ))}
-                    {products.length === 0 && (
-                        <p className="text-gray-500 col-span-full text-center py-20 font-semibold border-dashed border rounded-2xl bg-white">No products found. Add your first item!</p>
-                    )}
-                </div>
+                    <div className="flex gap-2">
+                        <button type="button" onClick={() => setNewProduct({ ...newProduct, variants: [...newProduct.variants, emptyVariant()] })} className="text-sm font-bold text-emerald-700 hover:underline">+ Add weight option</button>
+                        <button disabled={busy === 'create'} className="ml-auto px-5 py-2.5 rounded-xl bg-stone-950 text-white text-sm font-bold hover:bg-stone-800 transition active:scale-95 disabled:opacity-50 flex items-center gap-2"><Save size={15} /> {busy === 'create' ? 'Saving…' : 'Save product'}</button>
+                    </div>
+                </form>
             )}
 
-            {/* Edit Product Modal */}
-            {editingProduct && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl border p-6 space-y-4 animate-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center border-b pb-3">
-                            <h2 className="text-lg font-bold text-gray-900">Edit Catalog Product</h2>
-                            <button onClick={() => setEditingProduct(null)} className="p-1 text-gray-400 hover:text-gray-600">
-                                <X size={20} />
-                            </button>
-                        </div>
-                        <form onSubmit={handleUpdate} className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-semibold text-gray-700 mb-1">Product Name</label>
-                                <input
-                                    className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm"
-                                    value={editingProduct.base_name}
-                                    onChange={e => setEditingProduct({ ...editingProduct, base_name: e.target.value })}
-                                    required
-                                />
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-1">Selling Price (₹)</label>
-                                    <input
-                                        type="number"
-                                        className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm"
-                                        value={editingProduct.price}
-                                        onChange={e => setEditingProduct({ ...editingProduct, price: e.target.value })}
-                                        required
-                                    />
-                                </div>
-                                {userRole === 'Owner' ? (
-                                    <div>
-                                        <label className="block text-sm font-semibold text-rose-600 mb-1">Cost Price (₹)</label>
-                                        <input
-                                            type="number"
-                                            className="w-full border border-rose-200 p-3 rounded-xl outline-none focus:ring-2 focus:ring-rose-500 transition text-sm bg-rose-50/10"
-                                            value={editingProduct.cost_price}
-                                            onChange={e => setEditingProduct({ ...editingProduct, cost_price: e.target.value })}
-                                        />
-                                    </div>
-                                ) : null}
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-1">Stock Quantity</label>
-                                    <input
-                                        type="number"
-                                        className="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-green-500 transition text-sm"
-                                        value={editingProduct.stock}
-                                        onChange={e => setEditingProduct({ ...editingProduct, stock: e.target.value })}
-                                        required
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex justify-end gap-2 mt-4 pt-3 border-t">
-                                <button type="button" onClick={() => setEditingProduct(null)} className="px-5 py-2.5 rounded-xl text-gray-500 hover:bg-gray-50 font-medium transition text-sm">Cancel</button>
-                                <button type="submit" className="bg-green-600 text-white px-6 py-2.5 rounded-xl hover:bg-green-700 flex items-center gap-2 text-sm font-bold shadow active:scale-95 transition-all">
-                                    <Save size={18} /> Update Product
-                                </button>
-                            </div>
-                        </form>
-                    </div>
+            <div className="flex flex-col md:flex-row gap-2.5">
+                <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search products…" className="flex-1 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm bg-white outline-none focus:ring-2 focus:ring-emerald-500 shadow-sm" />
+                <div className="flex gap-1.5 bg-white border border-stone-200 rounded-2xl p-1 shadow-sm">
+                    {[['all', 'All'], ['out', 'Out of stock'], ['pending', 'Pending push'], ['inactive', 'Hidden']].map(([k, l]) => (
+                        <button key={k} onClick={() => setFilter(k)} className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${filter === k ? 'bg-stone-950 text-white' : 'text-stone-500 hover:bg-stone-100'}`}>{l}</button>
+                    ))}
                 </div>
-            )}
+            </div>
+
+            <div className="grid gap-4">
+                {filtered.map(p => {
+                    const editing = editingId === p.product_id;
+                    const rows = editing ? draftVariants : (p.variants || []);
+                    return (
+                        <div key={p.product_id} className="rounded-3xl bg-white border border-stone-200 shadow-lg shadow-stone-200/40 overflow-hidden">
+                            <div className="p-4 md:p-5 flex flex-wrap items-center gap-3 border-b border-stone-100 bg-gradient-to-r from-stone-50 to-white">
+                                <span className="w-11 h-11 rounded-2xl bg-emerald-100 text-emerald-700 grid place-items-center font-extrabold">{(p.base_name || '?')[0]}</span>
+                                <div className="flex-1 min-w-[160px]">
+                                    <h3 className="font-extrabold leading-tight">{p.base_name}</h3>
+                                    <p className="text-xs text-stone-500">{(p.variants || []).length} weight options</p>
+                                </div>
+                                <SyncBadge retailerId={(p.variants || []).every(v => v.retailer_id || v.meta_product_retailer_id) ? 'x' : ''} />
+                                <div className="flex gap-1.5">
+                                    {!editing ? (
+                                        <>
+                                            <button onClick={() => pushProduct(p.product_id)} disabled={busy === 'push' + p.product_id} className="p-2 rounded-xl text-emerald-700 hover:bg-emerald-50 transition" title="Push to Meta"><Upload size={16} /></button>
+                                            <button onClick={() => startEdit(p)} className="p-2 rounded-xl text-stone-600 hover:bg-stone-100 transition" title="Edit"><Pencil size={16} /></button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button onClick={() => saveEdit(p)} disabled={busy === p.product_id} className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 transition active:scale-95 disabled:opacity-50 flex items-center gap-1.5"><Save size={13} /> {busy === p.product_id ? 'Saving…' : 'Save'}</button>
+                                            <button onClick={() => setEditingId(null)} className="p-2 rounded-xl text-stone-500 hover:bg-stone-100"><X size={16} /></button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm min-w-[760px]">
+                                    <thead><tr className="text-left text-[11px] uppercase tracking-wider text-stone-400">
+                                        <th className="px-4 py-2.5 font-bold">Weight</th><th className="px-2 py-2.5 font-bold">Price</th><th className="px-2 py-2.5 font-bold">Stock</th><th className="px-2 py-2.5 font-bold">Order qty</th><th className="px-2 py-2.5 font-bold">Meta ID</th><th className="px-2 py-2.5 font-bold">Status</th><th className="px-4 py-2.5"></th>
+                                    </tr></thead>
+                                    <tbody>
+                                        {rows.map((v, i) => {
+                                            const rid = v.retailer_id || v.meta_product_retailer_id || '';
+                                            const stock = v.stock ?? v.stock_quantity ?? 0;
+                                            const set = (k, val) => setDraftVariants(d => d.map((r, j) => j === i ? { ...r, [k]: val } : r));
+                                            return (
+                                                <tr key={v.variant_id || i} className={`border-t border-stone-100 ${v.is_active === false ? 'opacity-50' : ''}`}>
+                                                    <td className="px-4 py-2.5 font-semibold">{editing ? (
+                                                        <span className="flex gap-1.5">
+                                                            <select value={weightValue(v)} onChange={e => set('weight', e.target.value)} className="border border-stone-200 rounded-lg px-2 py-1.5 text-sm bg-white">{WEIGHT_PRESETS.map(w => <option key={w}>{w}</option>)}</select>
+                                                        </span>
+                                                    ) : (v.weight || v.weight_label)}</td>
+                                                    <td className="px-2 py-2.5">{editing ? <input type="number" min="1" value={v.price} onChange={e => set('price', e.target.value)} className="w-20 border border-stone-200 rounded-lg px-2 py-1.5 text-sm" /> : `₹${v.price}`}</td>
+                                                    <td className="px-2 py-2.5">{editing ? <input type="number" min="0" value={v.stock} onChange={e => set('stock', e.target.value)} className="w-20 border border-stone-200 rounded-lg px-2 py-1.5 text-sm" /> : (<span className={`font-bold ${stock <= 0 ? 'text-rose-600' : stock < 10 ? 'text-amber-600' : 'text-stone-700'}`}>{stock <= 0 ? 'Out' : stock}</span>)}</td>
+                                                    <td className="px-2 py-2.5 text-xs text-stone-500">{editing ? (
+                                                        <span className="flex gap-1 items-center">
+                                                            <input value={v.min_qty} onChange={e => set('min_qty', e.target.value)} className="w-11 border border-stone-200 rounded-lg px-1.5 py-1.5 text-sm" title="Min" />–
+                                                            <input value={v.max_qty} onChange={e => set('max_qty', e.target.value)} className="w-11 border border-stone-200 rounded-lg px-1.5 py-1.5 text-sm" title="Max" />
+                                                            <select value={v.qty_step} onChange={e => set('qty_step', e.target.value)} className="border border-stone-200 rounded-lg px-1 py-1.5 text-sm" title="Step">{QTY_STEPS.map(s => <option key={s} value={s}>×{s}</option>)}</select>
+                                                        </span>
+                                                    ) : `${v.min_qty ?? v.min_quantity ?? 1}–${v.max_qty ?? v.max_quantity ?? 20} ×${v.qty_step ?? v.quantity_step ?? 1}`}</td>
+                                                    <td className="px-2 py-2.5"><code className="text-[11px] bg-stone-100 rounded-lg px-2 py-1 font-mono">{rid ? rid.slice(0, 10) + '…' : '—'}</code></td>
+                                                    <td className="px-2 py-2.5"><SyncBadge retailerId={rid} /></td>
+                                                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                                                        {v.variant_id && (
+                                                            <button onClick={() => toggleVariant(v.variant_id, !(v.is_active !== false))} className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition ${v.is_active !== false ? 'text-rose-600 hover:bg-rose-50' : 'text-emerald-700 hover:bg-emerald-50'}`}>
+                                                                {v.is_active !== false ? 'Hide' : 'Show'}
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {editing && (
+                                <div className="p-3 border-t border-stone-100 bg-stone-50/60">
+                                    <button onClick={() => setDraftVariants(d => [...d, { weight: '500 gm', price: '', stock: 100, min_qty: 1, max_qty: 20, qty_step: 1, sku: '', retailer_id: '', is_active: true }])} className="text-xs font-bold text-emerald-700 hover:underline">+ Add weight option</button>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+                {filtered.length === 0 && (
+                    <div className="rounded-3xl border-2 border-dashed border-stone-200 p-10 text-center text-sm text-stone-500 bg-white/60">
+                        <Package size={28} className="mx-auto mb-2 text-stone-300" /> No products match. Add your first product above, or Import from Meta.
+                    </div>
+                )}
+            </div>
+            <p className="text-[11px] text-stone-400 flex items-center gap-1.5"><RefreshCw size={12} /> Saves update the shop instantly; Meta catalog syncs in the background. Missing META token? Saves still work — badge shows Pending push.</p>
         </div>
     );
 }

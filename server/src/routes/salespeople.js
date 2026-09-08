@@ -2,10 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../database/db');
 
-// Pre-flight database columns migration check
-pool.query("ALTER TABLE sales_commissions ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'UNPAID'").catch(err => {
-    console.error("Migration error on sales_commissions:", err.message);
-});
+// NOTE: payout_status migration lives canonically in server/migrate.js (no route-load side effects).
 
 // GET /api/salespeople - List all salesperson details and aggregate commissions
 router.get('/', async (req, res) => {

@@ -53,7 +53,10 @@ CREATE TABLE product_variants (
     meta_product_retailer_id VARCHAR(100),
     stock_quantity INTEGER DEFAULT 0,
     sku_code VARCHAR(50) UNIQUE,
-    is_active BOOLEAN DEFAULT TRUE
+    is_active BOOLEAN DEFAULT TRUE,
+    min_quantity INTEGER DEFAULT 1,
+    max_quantity INTEGER DEFAULT 20,
+    quantity_step INTEGER DEFAULT 1
 );
 
 -- 3. Orders & Transactions
@@ -118,10 +121,10 @@ CREATE TABLE otps (
 CREATE TABLE payment_logs (
     log_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     order_id UUID REFERENCES orders(order_id),
-    upi_transaction_id VARCHAR(100),
+    upi_transaction_id VARCHAR(100) UNIQUE,
     amount DECIMAL(10, 2),
     status VARCHAR(50),
-    raw_response JSONB, -- Store full webhook payload
+    raw_response JSONB, -- Store full webhook payload (truncate to 10k chars in code)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -140,6 +143,10 @@ CREATE TABLE conversation_logs (
     message_type VARCHAR(20), -- 'incoming', 'outgoing'
     content TEXT,
     message_id VARCHAR(100) UNIQUE,
+    conversation_id UUID,
+    session_stage VARCHAR(50),
+    metadata JSONB,
+    processing_type VARCHAR(20), -- 'voice' | 'manual'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -163,7 +170,9 @@ CREATE TABLE carts (
     cart_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     customer_id UUID REFERENCES customers(customer_id),
     status VARCHAR(20) DEFAULT 'ACTIVE', -- ACTIVE, CONVERTED
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    session_metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE TABLE cart_items (
@@ -187,7 +196,10 @@ CREATE TABLE pincode_master (
     office_name VARCHAR(100),
     taluk VARCHAR(100),
     district_name VARCHAR(100),
-    state_name VARCHAR(100)
+    state_name VARCHAR(100),
+    is_allowed BOOLEAN DEFAULT TRUE,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION
 );
 
 -- 10. Funnel Drop-offs Analytics
@@ -244,6 +256,7 @@ CREATE TABLE sales_commissions (
     salesperson_id UUID REFERENCES salespeople(salesperson_id),
     order_id UUID REFERENCES orders(order_id),
     commission_amount DECIMAL(10, 2) NOT NULL,
+    payout_status VARCHAR(20) DEFAULT 'PENDING',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

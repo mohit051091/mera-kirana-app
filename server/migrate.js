@@ -65,6 +65,10 @@ async function runMigration() {
             await pool.query(`ALTER TABLE carts ADD COLUMN session_metadata JSONB DEFAULT '{}'::jsonb;`);
             console.log('✅ Added Column: session_metadata to carts');
         }
+        if (!cartsCols.includes('updated_at')) {
+            await pool.query(`ALTER TABLE carts ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`);
+            console.log('✅ Added Column: updated_at to carts');
+        }
 
         // 5. Create cart_items table
         await pool.query(`
@@ -299,19 +303,27 @@ async function runMigration() {
             console.log(`✅ Backfilled meta_product_retailer_id for ${backfillRes.rowCount} product variants`);
         }
 
-        // 18. Auto-seed welcome tip voice note media IDs (MP3 format)
-        // Clean out legacy invalid media IDs if present
-        await pool.query("DELETE FROM system_settings WHERE key LIKE 'welcome_tip_%'");
+        // 17b. Canonicalize split-brain columns + idempotency constraints
+        await pool.query(`ALTER TABLE sales_commissions ADD COLUMN IF NOT EXISTS payout_status VARCHAR(20) DEFAULT 'PENDING';`);
+        await pool.query(`ALTER TABLE payment_logs ADD CONSTRAINT IF NOT EXISTS payment_logs_upi_txn_unique UNIQUE (upi_transaction_id);`);
+        await pool.query(`UPDATE carts SET updated_at = created_at WHERE updated_at IS NULL;`);
+        // 17c. Owner catalog manager: per-variant order-quantity controls
+        await pool.query(`ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS min_quantity INTEGER DEFAULT 1;`);
+        await pool.query(`ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS max_quantity INTEGER DEFAULT 20;`);
+        await pool.query(`ALTER TABLE product_variants ADD COLUMN IF NOT EXISTS quantity_step INTEGER DEFAULT 1;`);
+        console.log('✅ Checked: payout_status, payment_logs unique, carts.updated_at backfill');
 
+        // 18. Seed welcome tip voice note media IDs only if missing (never wipe existing keys on boot)
         const mediaCheck = await pool.query("SELECT 1 FROM system_settings WHERE key = 'welcome_tip_new_media_id_v5' LIMIT 1");
         if (mediaCheck.rows.length === 0) {
             console.log('🎙️ Generating fresh short Hinglish MP3 welcome tip voice notes and uploading to Meta...');
             try {
-                const SARVAM_KEY = process.env.SARVAM_API_KEY || 'sk_o2r2qvi7_wO6CZZ4vWWlGkgZ45SPwCBrJ';
-                const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || 'EAAWJurSGNC8BR6Db6DCyhaP5v1vDkdEyv3PkhR2mj4ycI8lQsvBUl6NbaGW8r4rZC5g4ZBGdFK8LoH8d2sds3WVYAiowCDAR3tEc1sHhW1ZAbXYnaXyZBDtuJnkjPQqUe5SNcoRgecHfcMJTKF7Ee4rgK4SK2gM1fv44NqAY4ZAEq3JuJjdnxSztTVZBL91nL8PwZDZD';
-                const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '871709562699676';
-
-                if (SARVAM_KEY && WA_TOKEN && WA_PHONE_ID) {
+                const SARVAM_KEY = process.env.SARVAM_API_KEY;
+                const WA_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+                const WA_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+                if (!SARVAM_KEY || !WA_TOKEN || !WA_PHONE_ID) {
+                    console.warn('⚠️ Skipping welcome audio seeding: SARVAM_API_KEY / WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_ID not set.');
+                } else {
                     const axios = require('axios');
                     const FormData = require('form-data');
                     const variants = [
@@ -361,8 +373,6 @@ async function runMigration() {
                             console.log(`  ✅ Successfully seeded welcome audio media ID: ${mediaId} for ${v.settingsKey}`);
                         }
                     }
-                } else {
-                    console.warn('⚠️ Missing API keys for auto-seeding welcome audio.');
                 }
             } catch (autoErr) {
                 console.error('⚠️ Auto-seeding welcome audio failed:', autoErr.response?.data || autoErr.message);

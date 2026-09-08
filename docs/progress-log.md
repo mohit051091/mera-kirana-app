@@ -121,3 +121,17 @@
   2. **Zero-Cost Webhook Audio Dispatch:** Refactored greeting webhook handler to fetch and dispatch pre-cached media IDs directly from `system_settings`. Eliminates all external URL dependencies (fixing Meta 404 errors) and incurs zero ongoing TTS charges per user message.
   3. **Robust Catalog Variant Matching:** Enhanced `type === 'order'` handler in `webhook.js` to check both `meta_product_retailer_id` and case-insensitive `sku_code`, added detailed debug logging, and added a database migration step to auto-backfill `meta_product_retailer_id` from `sku_code`.
   4. **Purged Supabase References:** Cleaned out Supabase host references from `.env` and aligned documentation with Railway PostgreSQL infrastructure.
+
+## [2026-09-08] Security & Reliability Hardening Pass + Railway Live Check
+- **Trigger:** User asked to check Railway deployed code/env before fixing; audit found hardcoded fallbacks, IDOR, catalog abuse vectors, DB drift, service OFFLINE.
+- **Action:**
+  1. Linked Railway CLI to `pure-strength / mera-kirana-app` (was linked to dhan-collector). Confirmed service OFFLINE, all deployments REMOVED, Postgres ONLINE. Railway vars have only DB_* + 3 WhatsApp keys; 10 required keys missing.
+  2. Removed secret fallbacks (`auth.js`, `index.js`, `webhook.js` VERIFY, `payments.js`, `migrate.js` Sarvam/WA) — boot fails fast if env missing. Removed `merakirana123` backdoor + `NODE_ENV=test` bypass. JWT 7d→12h + iss/jti, bcrypt.hashSync at boot.
+  3. Catalog: removed price/cheapest fallback + auto-learn; staged inserts, cart replaced only on validated matches; qty clamped 1-20; unmatched logged.
+  4. IDOR: subscription pause/resume/cancel + repeat-order scoped `AND customer_id`; UUID-validated; DELETE→soft CANCEL. Subscriptions API: pagination, enum whitelists, qty 1-50, future-date check.
+  5. Orders: double-tap guard, address/slot required + whitelisted, coupon atomic `max_uses` guard, unknown-address block, unsigned `upi://` fallback removed (Razorpay link or COD-manual message).
+  6. Payments: require secret, timingSafeEqual, require txn id, exact-paise compare, truncate raw_response, ON CONFLICT idempotency, failure/refund logging.
+  7. Hardening: `server.js` CORS allowlist + 100kb body limit + 404/error handler; `whatsapp.js` lazy creds + 10s timeout + button/list caps; webhook interactive uses id, null-safe text, catalog/phone crash guards, frequency/variant whitelist.
+  8. DB: `migrate.js` adds `carts.updated_at`, `sales_commissions.payout_status`, `payment_logs` unique, backfills nulls; removed boot `DELETE welcome_tip_%` + hardcoded keys; removed route-load ALTER in `salespeople.js`; synced `schema.sql` (carts session_metadata/updated_at, conversation_logs 4 cols, pincode geo/allow, payment unique, payout_status).
+  9. Frontend: `lib/api.js` baseURL → `NEXT_PUBLIC_API_BASE_URL || '/api'`; middleware shape-check disclaimer; products default role Manager (client gate noted as non-boundary).
+  10. Verified: all 9 backend `node --check` OK; `admin-dashboard npm run build` OK (15/15 static pages).

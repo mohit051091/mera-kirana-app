@@ -71,7 +71,11 @@ router.get('/whatsapp', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
-    const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'merakirana123';
+    const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+    if (!VERIFY_TOKEN) {
+        console.error('FATAL: WHATSAPP_VERIFY_TOKEN env var is required.');
+        return res.sendStatus(500);
+    }
 
     if (mode && token) {
         if (mode === 'subscribe' && token === VERIFY_TOKEN) {
@@ -142,7 +146,10 @@ async function sendSlotList(from, addrId, metadata, cartId) {
 // POST /webhook/whatsapp - Incoming Messages
 router.post('/whatsapp', async (req, res) => {
     const body = req.body;
-    console.log('Incoming Webhook:', JSON.stringify(body, null, 2));
+    try {
+        const m = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+        console.log('Incoming Webhook:', JSON.stringify({ from: m?.from, type: m?.type, id: m?.id }));
+    } catch { console.log('Incoming Webhook: (unparseable)'); }
     res.sendStatus(200);
 
     const TRANSLATIONS = {
@@ -275,13 +282,13 @@ router.post('/whatsapp', async (req, res) => {
             let audioId = null;
 
             if (type === 'text') {
-                text = msg.text ? msg.text.body : '';
+                text = msg.text?.body ?? '';
             } else if (type === 'interactive') {
                 interactive = msg.interactive;
                 if (interactive.button_reply) {
-                    text = interactive.button_reply.title;
+                    text = interactive.button_reply.id || interactive.button_reply.title || '';
                 } else if (interactive.list_reply) {
-                    text = interactive.list_reply.title;
+                    text = interactive.list_reply.id || interactive.list_reply.title || '';
                 }
             } else if (type === 'audio') {
                 audioId = msg.audio ? msg.audio.id : null;
@@ -490,17 +497,15 @@ router.post('/whatsapp', async (req, res) => {
                 console.log(`[CATALOG ORDER] Customer ${from}: ${productItems.length} items received. Retailer IDs:`, productItems.map(i => i.product_retailer_id));
 
                 if (productItems && productItems.length > 0) {
-                    // Clear existing cart items
-                    await db.query('DELETE FROM cart_items WHERE cart_id = $1', [cartId]);
-
                     let addedCount = 0;
                     let unmatchedIds = [];
+                    const stagedInserts = [];
                     for (const item of productItems) {
                         const retailerId = item.product_retailer_id;
-                        const qty = item.quantity || 1;
-                        const itemPrice = item.item_price;
+                        const qty = Math.min(Math.max(parseInt(item.quantity, 10) || 1, 1), 20);
+                        if (!retailerId) { unmatchedIds.push('(missing-id)'); continue; }
 
-                        // 1. Try exact case-insensitive match on meta_product_retailer_id, sku_code, or UUID
+                        // Exact match only on meta_product_retailer_id, sku_code, or UUID (no price/cheapest fallback)
                         let variantQuery = await db.query(
                             `SELECT variant_id FROM product_variants 
                              WHERE (LOWER(TRIM(meta_product_retailer_id)) = LOWER(TRIM($1)) 
@@ -510,47 +515,27 @@ router.post('/whatsapp', async (req, res) => {
                             [retailerId]
                         );
 
-                        // 2. Fallback: match by catalog item_price if exact retailerId didn't match
-                        if (variantQuery.rows.length === 0 && itemPrice) {
-                            variantQuery = await db.query(
-                                `SELECT variant_id FROM product_variants 
-                                 WHERE (price = $1 OR cost_price = $1) AND is_active = true LIMIT 1`,
-                                [itemPrice]
-                            );
-                            if (variantQuery.rows.length > 0) {
-                                console.log(`[CATALOG ORDER] 💡 Matched retailer_id "${retailerId}" by price ₹${itemPrice}`);
-                            }
-                        }
-
-                        // 3. Ultimate Fallback: pick lowest active variant
                         if (variantQuery.rows.length === 0) {
-                            variantQuery = await db.query(
-                                `SELECT variant_id FROM product_variants WHERE is_active = true ORDER BY price ASC LIMIT 1`
-                            );
-                            if (variantQuery.rows.length > 0) {
-                                console.log(`[CATALOG ORDER] 💡 Fallback matched retailer_id "${retailerId}" to active variant`);
-                            }
+                            unmatchedIds.push(String(retailerId));
+                            continue;
                         }
 
                         if (variantQuery.rows.length > 0) {
                             const variantId = variantQuery.rows[0].variant_id;
-                            await db.query(
-                                'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3)',
-                                [cartId, variantId, qty]
-                            );
+                            stagedInserts.push({ variantId, qty });
                             addedCount++;
-
-                            // Auto-learn: associate retailer_id in DB so future requests match directly
-                            if (retailerId) {
-                                await db.query(
-                                    `UPDATE product_variants SET meta_product_retailer_id = $1 WHERE variant_id = $2 AND (meta_product_retailer_id IS NULL OR meta_product_retailer_id != $1)`,
-                                    [retailerId, variantId]
-                                ).catch(e => console.error('Auto-learn update error:', e.message));
-                            }
+                            // NOTE: auto-learn of attacker-supplied retailer_id removed (abuse vector). Map IDs via admin dashboard.
                         }
                     }
-
-                    if (addedCount > 0) {
+                    // Only replace cart after successful validation (never wipe on parse failure)
+                    if (stagedInserts.length > 0) {
+                        await db.query('DELETE FROM cart_items WHERE cart_id = $1', [cartId]);
+                        for (const s of stagedInserts) {
+                            await db.query(
+                                'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3)',
+                                [cartId, s.variantId, s.qty]
+                            );
+                        }
                         // Reset stage to checkout ready
                         metadata.stage = 'START';
                         await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
@@ -585,7 +570,7 @@ router.post('/whatsapp', async (req, res) => {
                     }
                 }
 
-                console.error(`[CATALOG ORDER] ❌ Failed to parse catalog order for ${from}. 0 items matched.`);
+                console.error(`[CATALOG ORDER] ❌ Failed to parse catalog order for ${from}. 0 items matched. Unmatched:`, unmatchedIds);
                 const parseErrorMsg = TRANSLATIONS.CATALOG_PARSE_ERROR[userLang];
                 await whatsappService.sendText(from, parseErrorMsg);
                 await whatsappService.markAsRead(messageId);
@@ -1078,7 +1063,8 @@ Rules:
 
                 if (buttonId.startsWith('btn_sub_pause_')) {
                     const subId = buttonId.replace('btn_sub_pause_', '');
-                    await db.query("UPDATE subscriptions SET status = 'PAUSED' WHERE subscription_id = $1", [subId]);
+                    if (!/^[0-9a-fA-F-]{36}$/.test(subId)) { await whatsappService.markAsRead(messageId); return; }
+                    await db.query("UPDATE subscriptions SET status = 'PAUSED' WHERE subscription_id = $1 AND customer_id = $2", [subId, customerId]);
                     const text = userLang === 'HI' 
                         ? "⏸️ आपकी डिलीवरी रोक दी गई है। आप इसे कभी भी शुरू कर सकते हैं!"
                         : (userLang === 'MR' ? "⏸️ तुमची डिलिव्हरी थांबवली गेली आहे. तुम्ही कधीही सुरू करू शकता!" : "⏸️ Delivery schedule paused. You can resume at any time!");
@@ -1089,7 +1075,8 @@ Rules:
 
                 if (buttonId.startsWith('btn_sub_resume_')) {
                     const subId = buttonId.replace('btn_sub_resume_', '');
-                    await db.query("UPDATE subscriptions SET status = 'ACTIVE' WHERE subscription_id = $1", [subId]);
+                    if (!/^[0-9a-fA-F-]{36}$/.test(subId)) { await whatsappService.markAsRead(messageId); return; }
+                    await db.query("UPDATE subscriptions SET status = 'ACTIVE' WHERE subscription_id = $1 AND customer_id = $2", [subId, customerId]);
                     const text = userLang === 'HI' 
                         ? "▶️ आपकी डिलीवरी फिर से शुरू कर दी गई है!"
                         : (userLang === 'MR' ? "▶️ तुमची डिलिव्हरी पुन्हा सुरू झाली आहे!" : "▶️ Delivery schedule resumed successfully!");
@@ -1100,7 +1087,8 @@ Rules:
 
                 if (buttonId.startsWith('btn_sub_cancel_')) {
                     const subId = buttonId.replace('btn_sub_cancel_', '');
-                    await db.query("DELETE FROM subscriptions WHERE subscription_id = $1", [subId]);
+                    if (!/^[0-9a-fA-F-]{36}$/.test(subId)) { await whatsappService.markAsRead(messageId); return; }
+                    await db.query("UPDATE subscriptions SET status = 'CANCELLED' WHERE subscription_id = $1 AND customer_id = $2", [subId, customerId]);
                     const text = userLang === 'HI' 
                         ? "❌ आपकी सदस्यता सफलतापूर्वक रद्द कर दी गई है।"
                         : (userLang === 'MR' ? "❌ तुमची वर्गणी यशस्वीरित्या रद्द करण्यात आली आहे." : "❌ Subscription schedule cancelled and deleted successfully.");
@@ -1144,7 +1132,18 @@ Rules:
 
                 if (buttonId.startsWith('btn_sub_freq_')) {
                     const frequency = buttonId.replace('btn_sub_freq_', '');
+                    if (!['DAILY', 'WEEKLY', 'ALTERNATE', 'MONTHLY'].includes(frequency)) {
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
                     const variantId = metadata.sub_variant_id;
+                    if (!variantId) { await whatsappService.markAsRead(messageId); return; }
+                    const variantCheck = await db.query('SELECT 1 FROM product_variants WHERE variant_id = $1 AND is_active = true', [variantId]);
+                    if (variantCheck.rows.length === 0) {
+                        await whatsappService.sendText(from, "That product is no longer available. Please choose another.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
                     
                     const tomorrow = new Date();
                     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1172,7 +1171,8 @@ Rules:
 
                 if (buttonId.startsWith('btn_repeat_last_')) {
                     const lastOrderId = buttonId.replace('btn_repeat_last_', '');
-                    const oldOrderQuery = await db.query('SELECT * FROM orders WHERE order_id = $1 LIMIT 1', [lastOrderId]);
+                    if (!/^[0-9a-fA-F-]{36}$/.test(lastOrderId)) { await whatsappService.markAsRead(messageId); return; }
+                    const oldOrderQuery = await db.query('SELECT * FROM orders WHERE order_id = $1 AND customer_id = $2 LIMIT 1', [lastOrderId, customerId]);
                     if (oldOrderQuery.rows.length === 0) {
                         await whatsappService.sendText(from, "Could not find your last order. Please browse catalog.");
                         return;
@@ -1267,11 +1267,12 @@ Rules:
                     return;
                 } else if (buttonId === 'btn_products') {
                     try {
-                        const catalogId = process.env.WHATSAPP_CATALOG_ID || "5h0o9zetew";
+                        const catalogId = process.env.WHATSAPP_CATALOG_ID;
+                        if (!catalogId) throw new Error('WHATSAPP_CATALOG_ID not configured');
                         await whatsappService.sendCatalog(from, "Browse our fresh catalog! 🏪", catalogId);
                     } catch (e) {
-                        const phoneNumber = process.env.WHATSAPP_PHONE_ID.replace(/\D/g, '');
-                        await whatsappService.sendText(from, "Browse catalog here: https://wa.me/c/" + phoneNumber);
+                        const phoneNumber = (process.env.WHATSAPP_PHONE_ID || '').replace(/\D/g, '');
+                        await whatsappService.sendText(from, "Browse catalog here: https://wa.me/c/" + (phoneNumber || ''));
                     }
                 } else if (buttonId === 'btn_view_cart') {
                     const cartSummary = await db.query(`
@@ -1421,6 +1422,11 @@ Rules:
 
                 } else if (buttonId === 'pay_upi' || buttonId === 'pay_cod') {
                     const method = buttonId === 'pay_upi' ? 'UPI' : 'COD';
+                    if (!metadata.address_id) {
+                        await whatsappService.sendText(from, "Please set a delivery address first. Tap 📦 My Orders or send your address with pincode.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
                     const summary = await db.query(`
                         SELECT p.base_name, v.weight_label, v.price, ci.quantity, a.address_text
                         FROM cart_items ci
@@ -1471,13 +1477,30 @@ Rules:
                         `${itemsText}` +
                         `*Final Total: ₹${finalTotal.toFixed(2)}*\n` +
                         `*Payment Mode: ${method}*\n` +
-                        `*Delivery To:* ${summary.rows[0].address_text}`;
+                        `*Delivery To:* ${summary.rows.length ? summary.rows[0].address_text : 'Saved Address'}`;
 
                     const buttons = [{ id: `place_${method.toLowerCase()}`, title: '✅ Place Order' }];
                     await whatsappService.sendButtons(from, text, buttons);
 
                 } else if (buttonId.startsWith('place_')) {
                     const method = buttonId.includes('upi') ? 'UPI' : 'COD';
+                    // Idempotency: block double-tap / Meta retries on same cart
+                    if (metadata.order_placed) {
+                        await whatsappService.sendText(from, "Your order is already placed ✅. Check 📦 My Orders for status.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                    if (!metadata.address_id || !metadata.slot) {
+                        await whatsappService.sendText(from, "Missing address or delivery slot. Please restart checkout from 🛍️ View Products.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                    const ALLOWED_SLOTS = ['morning', 'noon', 'evening', 'tomorrow_morning', 'tomorrow_evening'];
+                    if (!ALLOWED_SLOTS.includes(String(metadata.slot))) {
+                        await whatsappService.sendText(from, "Invalid delivery slot. Please choose a slot again.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
                     const client = await db.pool.connect();
                     
                     try {
@@ -1515,8 +1538,8 @@ Rules:
                                 const discount = cp.discount_type === 'PERCENT' ? (subtotal * cp.discount_value) / 100 : parseFloat(cp.discount_value);
                                 finalTotal -= discount;
                                 
-                                // Increment coupon usage
-                                await client.query('UPDATE coupons SET current_uses = current_uses + 1 WHERE code = $1', [metadata.coupon_code]);
+                                // Atomic increment with cap guard (prevents overuse race)
+                                await client.query('UPDATE coupons SET current_uses = current_uses + 1 WHERE code = $1 AND (max_uses IS NULL OR current_uses < max_uses)', [metadata.coupon_code]);
                             }
                         }
 
@@ -1531,7 +1554,13 @@ Rules:
                         }
 
                         const addrRes = await client.query('SELECT address_text FROM addresses WHERE address_id = $1', [metadata.address_id]);
-                        const addrText = addrRes.rows.length ? addrRes.rows[0].address_text : 'Unknown Address';
+                        if (addrRes.rows.length === 0) {
+                            await client.query('ROLLBACK');
+                            await whatsappService.sendText(from, "Delivery address not found. Please set your address again.");
+                            client.release();
+                            return;
+                        }
+                        const addrText = addrRes.rows[0].address_text;
 
                         // 1. Create order
                         const order = await client.query(`
@@ -1566,8 +1595,9 @@ Rules:
                             }
                         }
 
-                        // 4. Convert active cart
-                        await client.query("UPDATE carts SET status = 'CONVERTED' WHERE cart_id = $1", [cartId]);
+                        // 4. Convert active cart + mark idempotency flag
+                        metadata.order_placed = true;
+                        await client.query("UPDATE carts SET status = 'CONVERTED', session_metadata = $1 WHERE cart_id = $2", [metadata, cartId]);
 
                         // 5. If subscription, set up subscriptions table records
                         if (metadata.order_type === 'SUBSCRIPTION') {
@@ -1585,9 +1615,9 @@ Rules:
                         if (method === 'COD') {
                             await whatsappService.sendText(from, `🎉 *Order #${order.rows[0].readable_order_id} Confirmed!*\nCOD Premium applied. No returns, refunds, or cancellations are permitted on COD orders once hand-off is complete. We will deliver to: ${addrText}`);
                         } else {
-                            const host = process.env.PUBLIC_URL || 'https://whatsappbot-production.up.railway.app';
-                            let qrUrl = `${host}/api/orders/qr/${orderId}.png`;
-                            let intentLink = `upi://pay?pa=owner@bank&am=${finalTotal.toFixed(2)}&tr=${orderId}`;
+                            const host = process.env.PUBLIC_URL;
+                            let qrUrl = host ? `${host}/api/orders/qr/${orderId}.png` : null;
+                            let intentLink = null;
                             
                             const rzpKeyId = process.env.RAZORPAY_KEY_ID;
                             const rzpKeySecret = process.env.RAZORPAY_KEY_SECRET;
@@ -1630,8 +1660,12 @@ Rules:
                             }
                             
                             await whatsappService.sendText(from, `⏳ *Order #${order.rows[0].readable_order_id} is Pending Payment!*`);
-                            await whatsappService.sendImage(from, qrUrl, `Scan this dynamic QR Code to pay ₹${finalTotal.toFixed(2)} directly from GPay/PhonePe.`);
-                            await whatsappService.sendText(from, `Or tap this direct link to pay now: ${intentLink}`);
+                            if (intentLink && qrUrl) {
+                                await whatsappService.sendImage(from, qrUrl, `Scan this dynamic QR Code to pay ₹${finalTotal.toFixed(2)} directly from GPay/PhonePe.`);
+                                await whatsappService.sendText(from, `Or tap this direct link to pay now: ${intentLink}`);
+                            } else {
+                                await whatsappService.sendText(from, `Online payment is temporarily unavailable. Please choose Cash on Delivery or contact the shop. Amount: ₹${finalTotal.toFixed(2)}.`);
+                            }
                         }
 
                     } catch (error) {

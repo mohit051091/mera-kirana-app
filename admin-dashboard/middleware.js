@@ -13,7 +13,10 @@ export function middleware(request) {
         return NextResponse.next();
     }
 
-    // Redirect unauthenticated requests to login page
+    // Redirect unauthenticated requests to login page.
+    // NOTE: Edge middleware cannot verify JWT signature without jose/JWT_SECRET.
+    // This is a shape check only; real auth is enforced server-side on every /api route
+    // via verifyAdminAuth (Bearer JWT). Do NOT treat this as an auth boundary alone.
     if (!authCookie || !authCookie.value || authCookie.value === 'true' || authCookie.value.split('.').length !== 3) {
         const loginUrl = new URL('/login', request.url);
         return NextResponse.redirect(loginUrl);
