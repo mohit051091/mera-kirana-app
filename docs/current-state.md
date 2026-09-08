@@ -2,7 +2,8 @@
 
 - **Date:** 2026-09-08
 - **Status:** Phases 1-3 code-complete. 2026-09-08 security/hardening pass done (all backend `node --check` OK, Next.js build OK). Railway `pure-strength / mera-kirana-app` is OFFLINE (all deployments REMOVED) — needs redeploy after env vars set. Next step: set 10 missing Railway vars, redeploy, run migrate.
-- **Railway live check 2026-09-08:** service OFFLINE at `https://khandelwalktm.up.railway.app`, Postgres ONLINE. Railway vars present: DB_*, WHATSAPP_ACCESS_TOKEN/PHONE_ID/VERIFY_TOKEN only. Missing: WHATSAPP_CATALOG_ID, JWT_SECRET, ADMIN_PASSWORD, SARVAM/GEMINI, RAZORPAY_*, PUBLIC_URL, WHATSAPP_APP_SECRET.
+- **Railway live check 2026-09-08:** service OFFLINE at `https://khandelwalktm.up.railway.app`, Postgres ONLINE. Railway vars have only DB_* + 3 WhatsApp keys; 10 required keys missing.
+- **2026-09-09 tech fix (LIVE):** `WHATSAPP_CATALOG_ID=1565894964726780` set; 6 Meta variants seeded (Mawa 4×@₹432, Paneer 200g@₹72 + 500g@₹180) — tonight's `1dvax9ozjs` order now matches. Owner catalog manager shipped: `catalogSync.js` service (Meta push/delete/import), qty controls (`min/max/step`), variant PATCH endpoint, premium Owner Studio shell + Catalog page (weight presets, stock states, sync badges, Import/Push). Service ONLINE, deploys SUCCESS.
 
 ## Accomplishments & Current Setup
 - **Phase 1 (Sarvam speech STT):** Integrated Sarvam Saaras-Speech v3 API with fallbacks to Gemini, duration caps, de-duplication, rate limiting, settings dashboard controls, and `voice_cost_markup` percentage configuration.

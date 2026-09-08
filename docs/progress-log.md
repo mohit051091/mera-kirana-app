@@ -135,3 +135,12 @@
   8. DB: `migrate.js` adds `carts.updated_at`, `sales_commissions.payout_status`, `payment_logs` unique, backfills nulls; removed boot `DELETE welcome_tip_%` + hardcoded keys; removed route-load ALTER in `salespeople.js`; synced `schema.sql` (carts session_metadata/updated_at, conversation_logs 4 cols, pincode geo/allow, payment unique, payout_status).
   9. Frontend: `lib/api.js` baseURL → `NEXT_PUBLIC_API_BASE_URL || '/api'`; middleware shape-check disclaimer; products default role Manager (client gate noted as non-boundary).
   10. Verified: all 9 backend `node --check` OK; `admin-dashboard npm run build` OK (15/15 static pages).
+
+## [2026-09-09] Owner Catalog Manager + Seeded Catalog + Business Strategy Update
+- **Trigger:** Catalog cart order (paneer ₹72, retailer `1dvax9ozjs`) failed parse; owner asked for full dashboard control + premium look + business viability review.
+- **Action:**
+  1. Confirmed `product_variants` empty in prod (root cause). Set `WHATSAPP_CATALOG_ID=1565894964726780` (Catalogue_Products) on Railway.
+  2. Fixed migrate blocker (invalid `ADD CONSTRAINT IF NOT EXISTS` → `pg_constraint` guard), re-ran migrate SUCCESS, seeded 6 Meta variants (Mawa 4×@₹432, Paneer 200g@₹72 + 500g@₹180), verified MATCH.
+  3. Built `catalogSync.js` (push/delete/import via Meta API, token-gated), qty columns (`min/max/step`), variant PATCH endpoint, import/push endpoints, auto-push hooks; synced `schema.sql`.
+  4. Premium Owner Studio shell (grouped nav, shop-open pill) + Catalog page rewrite (stats hero, search/filters, weight presets incl. custom, stock states, qty min-max-step, sync badges, Import/Push/Hide). Backend checks + Next build green; deployed SUCCESS.
+  5. Logged incidents (migrate syntax, token leak). Updated BUSINESS_GTM_STRATEGY.md (§0 positioning vs Blinkit, §4 pilot checklist, §5 deferred SaaS model), tasks.md, decisions.md. Multi-tenant deferred per owner.

@@ -1,5 +1,17 @@
 # Decision Log
 
+## [2026-09-09] SaaS Model: Base + Revenue Share, Shop Owns Data, Multi-Tenant Deferred
+- **Decision:** (1) Pricing = base fee covering Meta/hosting + 5–8% on tracked repeat/campaign sales, no upfront software fee. (2) Each shop owns its customer data; we are processor (DPDP Act). (3) Phase 4 multi-tenant deferred until own-shop pilot (50+ orders, ≥30% repeat, 14d zero parse-fails) + one paid pilot validate.
+- **Reason:** Shops pay for proven orders, not dashboards. Holding their data kills trust and risks DPDP breach. Building tenant isolation before validating pricing locks in the wrong design.
+- **Status:** Approved.
+
+## [2026-09-09] Catalog Source of Truth: DB First, Meta Second
+- **Decision:** Dashboard writes DB first, pushes to Meta Catalog API best-effort in background; retailer IDs auto-stored; Pending-push badge when token missing. Exact-match only in webhook (price/cheapest fallbacks + auto-learn removed).
+- **Reason:** 2026-09-08 paneer order failed honestly rather than Guessing wrong item; guessing caused wrong-item abuse. DB-first never blocks orders on Meta.
+- **Status:** Approved.
+
+---
+
 ## [2026-07-15] Database Choice: PostgreSQL over MongoDB
 - **Decision:** Use PostgreSQL (hosted on Railway) as the primary database instead of MongoDB.
 - **Reason:** 

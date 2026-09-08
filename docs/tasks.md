@@ -5,7 +5,8 @@
 - [ ] Connect WhatsApp business account and configure phone webhook URL on Meta dashboard.
 
 ## Planned (Next Iteration)
-- [ ] Phase 4: Multi-Tenant Architecture (Multiple Shops)
+- [ ] Pilot validation at own shop (50+ orders, ≥30% repeat, 14d zero parse-fails) — see BUSINESS_GTM_STRATEGY.md §4
+- [ ] Phase 4: Multi-Tenant Architecture (DEFERRED until pilot validates; tenant isolation + billing spec still to write)
 - [ ] Phase 5: Open Network Commerce (ONDC Integration)
 
 ## In Progress
@@ -24,4 +25,6 @@
 - [x] Create Coupons and Salesperson referral dashboards with commission ledgers.
 - [x] Enforce Owner-only Cost Price (CP) margins and mask them for Managers.
 - [x] Enforce Cookie-based authentication middleware redirecting to `/login`.
-- [x] Compiled Next.js dashboard bundle successfully.
+- [x] Owner catalog manager: Meta sync service, qty controls, premium Owner Studio + Catalog page, 6 Meta variants seeded (Mawa 4, Paneer 2)
+- [x] Security hardening: no secret fallbacks, IDOR fixes, catalog exact-match, order idempotency, payments HMAC/paise/conlict guards
+- [x] Set WHATSAPP_CATALOG_ID=1565894964726780 on Railway; service ONLINE

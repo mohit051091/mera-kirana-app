@@ -2,7 +2,18 @@
 
 This document serves as the strategic roadmap for launch, marketing, marketplace distribution, and scaling of the Mera Kirana dairy shop automation.
 
+> **Advisor review 2026-09-09 (critical):** Don't out-Blinkit Blinkit. Win on fresh-perishable + sweets/custom + trust/credit + subscriptions. No packaged goods. WhatsApp = retention channel, not acquisition — the counter QR is the real storefront. Multi-shop SaaS only after one paid pilot proves revenue. Shop owns its data (DPDP Act); we are the processor. Model: base fee covering Meta/hosting + % on tracked repeat/campaign sales.
+
 ---
+
+## 0. Positioning: Why WhatsApp When Blinkit Exists
+
+- **Never compete head-on.** Blinkit wins on 10-min delivery, 10k SKUs, discovery. We win on three things it cannot do:
+  1. **Made-fresh today** — morning paneer, hot mawa sweets, home-set curd, custom orders (less sweet, 1 kg for tomorrow's party). Perishable + local + custom only. If Blinkit can stock it, we don't sell it.
+  2. **Trust + khata** — "same as last time, pay Friday." Neighborhood credit ledger, repeat shortcuts, owner on chat.
+  3. **Subscriptions as habit** — daily milk/curd on autopilot beats any app reminder.
+- **Assortment rule:** fresh dairy + sweets + festive pre-orders only. No packaged foods, ever.
+- **Channel truth:** customers don't "come to WhatsApp." They come from the counter (QR tent card), the society gate, bag inserts, referrals. Budget 80% of early effort on counter habit, not ads.
 
 ## 1. Go-To-Market (GTM) Launch Strategy
 A local dairy shop has a high-frequency, location-bound customer base. The primary GTM objective is to migrate existing walk-in/call-in customers to the automated WhatsApp channel, then expand in the local neighborhood.
@@ -60,3 +71,26 @@ graph TD
 ### D. Customer Excellence Agent
 - **Focus:** Post-purchase experience, feedback collection, and grievance handling.
 - **Guidance:** Standardizing replies for damaged goods (e.g., sour milk refunds), loyalty reward configurations, and broadcast flows.
+
+---
+
+## 4. Pilot Checklist: Own Shop First (Before Any SaaS Sale)
+
+Prove this at Khandelwal Traders before onboarding shop #2. Targets: 60 days.
+
+- [ ] 50+ real WhatsApp orders completed end-to-end (browse → cart → address → slot → pay → delivered).
+- [ ] ≥30% of revenue from repeat/subscription (repeat shortcut + subscription schedules working).
+- [ ] Zero catalog parse failures for 14 straight days (retailer IDs synced; seed script re-run documented).
+- [ ] Counter kit live: QR tent card, bag inserts, delivery-bag sticker, first-order offer (free sweet) + subscription discount.
+- [ ] DND compliance clean: every broadcast has STOP/START honored; no Meta ban/warning.
+- [ ] Unit math known: Meta conversation cost/order, Razorpay fee share (push COD where possible), delivery cost/order, refund rate.
+- [ ] One festive pre-order run (e.g., Diwali sweets) executed via campaigns + coupon tracking.
+
+## 5. Multi-Shop SaaS Model (Deferred — After Pilot)
+
+- **Status:** Deferred by owner decision 2026-09-09. Phase 4 spec only after one paid pilot validates pricing.
+- **Pricing (proposed):** ₹0 setup + base ~₹1,500/shop/month (covers Meta conversation + hosting costs) + 5–8% of tracked repeat/campaign-attributed sales (coupon/referral codes). Base keeps lights on; percentage aligns incentives. No upfront software fee before proven orders.
+- **Data ownership:** each shop owns its customer data; we are the data processor under contract (DPDP Act compliance). Moat = playbook + shared festival templates + network learnings, never holding shops' data hostage.
+- **Technical precondition:** full tenant isolation (separate shop_id scoping on every table, per-shop catalog/token/settings) — one data leak and every shop churns.
+- **Sequencing:** (1) own shop proves +20–30% repeat revenue 60 days → (2) one free-30-day pilot shop, success-fee only, learn second-catalog/second-rider breakage → (3) then build Phase 4 billing + isolation.
+- **Cost heads to price in:** Meta per-conversation fees (~₹0.5–1 marketing message), Razorpay ~2% + GST on online links, delivery ops, 24-h window limits on broadcasts.
