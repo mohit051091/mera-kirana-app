@@ -144,3 +144,7 @@
   3. Built `catalogSync.js` (push/delete/import via Meta API, token-gated), qty columns (`min/max/step`), variant PATCH endpoint, import/push endpoints, auto-push hooks; synced `schema.sql`.
   4. Premium Owner Studio shell (grouped nav, shop-open pill) + Catalog page rewrite (stats hero, search/filters, weight presets incl. custom, stock states, qty min-max-step, sync badges, Import/Push/Hide). Backend checks + Next build green; deployed SUCCESS.
   5. Logged incidents (migrate syntax, token leak). Updated BUSINESS_GTM_STRATEGY.md (§0 positioning vs Blinkit, §4 pilot checklist, §5 deferred SaaS model), tasks.md, decisions.md. Multi-tenant deferred per owner.
+
+## [2026-09-09] Go-Live Security Batch: Webhook HMAC, Raw-Body Razorpay, Login Rate-Limit, FSSAI/Policy Bills
+- **Trigger:** Go-live audit MUST-FIX list; owner said fix everything.
+- **Action:** (1) server.js captures req.rawBody. (2) webhook POST verifies x-hub-signature-256 with WHATSAPP_APP_SECRET before ACK (403 on forgery; warn-skip until secret set). (3) payments HMAC over raw bytes. (4) auth login 10-attempts/10-min per-IP lockout (429). (5) Catalog card thumbnail = cheapest active variant retailer ID. (6) migrate seeds shop_fssai + refund_policy_text; both print on confirm + COD messages. (7) Deployed SUCCESS; /api/health OK/CONNECTED; /api/products 401-without-token verified live.
