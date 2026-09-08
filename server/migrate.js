@@ -98,7 +98,9 @@ async function runMigration() {
             { key: 'voice_rate_limit_hourly', value: 3 },
             { key: 'voice_rate_limit_daily', value: 10 },
             { key: 'voice_cost_markup', value: 2 },
-            { key: 'voice_duration_cap', value: 30 }
+            { key: 'voice_duration_cap', value: 30 },
+            { key: 'shop_fssai', value: '' },
+            { key: 'refund_policy_text', value: 'Fresh dairy is checked before dispatch. Spoilt/damaged item? Send a photo within 6 hours of delivery for free replacement or refund. COD: no cancellation after dispatch. Online: refunds to source within 48 hours of approval.' }
             // Welcome tip audio media IDs are seeded separately via:  node scratch/seed_welcome_audio.js
         ];
         for (const setting of defaultSettings) {

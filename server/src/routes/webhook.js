@@ -145,6 +145,26 @@ async function sendSlotList(from, addrId, metadata, cartId) {
 
 // POST /webhook/whatsapp - Incoming Messages
 router.post('/whatsapp', async (req, res) => {
+    // 0. META SIGNATURE CHECK — reject forged webhooks before ACK (needs WHATSAPP_APP_SECRET)
+    try {
+        const appSecret = process.env.WHATSAPP_APP_SECRET;
+        if (appSecret) {
+            const sig = req.headers['x-hub-signature-256'] || '';
+            const expected = 'sha256=' + require('crypto').createHmac('sha256', appSecret).update(req.rawBody || Buffer.from(JSON.stringify(req.body))).digest('hex');
+            const a = Buffer.from(String(sig));
+            const b = Buffer.from(expected);
+            if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) {
+                console.error('❌ WhatsApp webhook signature mismatch — rejecting.');
+                return res.sendStatus(403);
+            }
+        } else if (!router._sigWarned) {
+            router._sigWarned = true;
+            console.warn('⚠️ WHATSAPP_APP_SECRET not set — webhook signature check SKIPPED (set it to enforce).');
+        }
+    } catch (sigErr) {
+        console.error('Signature check error:', sigErr.message);
+        return res.sendStatus(403);
+    }
     const body = req.body;
     try {
         const m = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
@@ -1269,7 +1289,12 @@ Rules:
                     try {
                         const catalogId = process.env.WHATSAPP_CATALOG_ID;
                         if (!catalogId) throw new Error('WHATSAPP_CATALOG_ID not configured');
-                        await whatsappService.sendCatalog(from, "Browse our fresh catalog! 🏪", catalogId);
+                        // Real product thumbnail (paneer 200g) so the card shows food, not a blank.
+                        const thumbRes = await db.query(
+                            `SELECT meta_product_retailer_id FROM product_variants WHERE is_active = true AND meta_product_retailer_id IS NOT NULL ORDER BY price ASC LIMIT 1`
+                        );
+                        const thumb = thumbRes.rows[0]?.meta_product_retailer_id || catalogId;
+                        await whatsappService.sendCatalog(from, "Browse our fresh catalog! 🏪", thumb);
                     } catch (e) {
                         const phoneNumber = (process.env.WHATSAPP_PHONE_ID || '').replace(/\D/g, '');
                         await whatsappService.sendText(from, "Browse catalog here: https://wa.me/c/" + (phoneNumber || ''));
@@ -1473,11 +1498,15 @@ Rules:
                         itemsText += `• Online UPI Discount: -₹${discount.toFixed(2)}\n`;
                     }
 
+                    const fssai = await getSetting('shop_fssai', '');
+                    const policy = await getSetting('refund_policy_text', '');
                     const text = `📦 *Confirm Order Details:*\n\n` +
                         `${itemsText}` +
                         `*Final Total: ₹${finalTotal.toFixed(2)}*\n` +
                         `*Payment Mode: ${method}*\n` +
-                        `*Delivery To:* ${summary.rows.length ? summary.rows[0].address_text : 'Saved Address'}`;
+                        `*Delivery To:* ${summary.rows.length ? summary.rows[0].address_text : 'Saved Address'}` +
+                        (policy ? `\n\n📜 *Policy:* ${policy}` : '') +
+                        (fssai ? `\nFSSAI Lic. No. ${fssai}` : '');
 
                     const buttons = [{ id: `place_${method.toLowerCase()}`, title: '✅ Place Order' }];
                     await whatsappService.sendButtons(from, text, buttons);
@@ -1612,8 +1641,12 @@ Rules:
                         await client.query('COMMIT');
 
                         // 6. Deliver confirmations
+                        const policy2 = await getSetting('refund_policy_text', '');
+                        const fssai2 = await getSetting('shop_fssai', '');
+                        const policyLine = policy2 ? `\n📜 ${policy2}` : '';
+                        const fssaiLine = fssai2 ? `\nFSSAI Lic. No. ${fssai2}` : '';
                         if (method === 'COD') {
-                            await whatsappService.sendText(from, `🎉 *Order #${order.rows[0].readable_order_id} Confirmed!*\nCOD Premium applied. No returns, refunds, or cancellations are permitted on COD orders once hand-off is complete. We will deliver to: ${addrText}`);
+                            await whatsappService.sendText(from, `🎉 *Order #${order.rows[0].readable_order_id} Confirmed!*\nCOD Premium applied.${policyLine} We will deliver to: ${addrText}${fssaiLine}`);
                         } else {
                             const host = process.env.PUBLIC_URL;
                             let qrUrl = host ? `${host}/api/orders/qr/${orderId}.png` : null;

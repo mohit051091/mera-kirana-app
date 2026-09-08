@@ -15,7 +15,11 @@ const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 app.use(cors(ALLOWED_ORIGINS.length ? { origin: ALLOWED_ORIGINS } : { origin: false }));
 app.disable('x-powered-by');
-app.use(bodyParser.json({ limit: '100kb' }));
+// Capture raw body for HMAC verification (Meta + Razorpay webhooks); parsed JSON still lands in req.body.
+app.use(bodyParser.json({
+    limit: '100kb',
+    verify: (req, res, buf) => { req.rawBody = buf; }
+}));
 
 // Routes
 const apiRoutes = require('./routes/index');

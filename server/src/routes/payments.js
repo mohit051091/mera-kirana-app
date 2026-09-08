@@ -17,10 +17,9 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: 'Missing signature' });
         }
 
-        // NOTE: Proper HMAC requires express.raw() body. JSON.stringify is an approximation;
-        // keep until route is switched to raw-body parsing. See docs/incidents.md.
+        // HMAC over the RAW request body (exact bytes Razorpay signed).
         const shasum = crypto.createHmac('sha256', secret);
-        shasum.update(JSON.stringify(req.body));
+        shasum.update(req.rawBody && Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body)));
         const digest = shasum.digest('hex');
 
         const a = Buffer.from(digest, 'utf8');
