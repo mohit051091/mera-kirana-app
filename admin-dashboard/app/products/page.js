@@ -86,14 +86,18 @@ export default function ProductsPage() {
 
     const startEdit = (p) => {
         setEditingId(p.product_id);
-        setDraftVariants((p.variants || []).map(v => ({
-            variant_id: v.variant_id, weight: v.weight || 'Standard', customWeight: '',
+        setDraftVariants((p.variants || []).map(v => {
+            const w = v.weight || 'Standard';
+            const isCustom = w !== 'Custom…' && !WEIGHT_PRESETS.includes(w);
+            return {
+            variant_id: v.variant_id, weight: isCustom ? 'Custom…' : w, customWeight: isCustom ? w : '',
             price: v.price ?? '', stock: v.stock ?? v.stock_quantity ?? 0,
             min_qty: v.min_qty ?? v.min_quantity ?? 1, max_qty: v.max_qty ?? v.max_quantity ?? 20,
             qty_step: v.qty_step ?? v.quantity_step ?? 1,
             sku: v.sku || v.sku_code || '', retailer_id: v.retailer_id || v.meta_product_retailer_id || '',
             is_active: v.is_active !== false,
-        })));
+            };
+        }));
     };
 
     const saveEdit = async (p) => {
@@ -249,7 +253,7 @@ export default function ProductsPage() {
                             <div className="overflow-x-auto">
                                 <table className="w-full text-sm min-w-[760px]">
                                     <thead><tr className="text-left text-[11px] uppercase tracking-wider text-stone-400">
-                                        <th className="px-4 py-2.5 font-bold">Weight</th><th className="px-2 py-2.5 font-bold">Price</th><th className="px-2 py-2.5 font-bold">Stock</th><th className="px-2 py-2.5 font-bold">Order qty</th><th className="px-2 py-2.5 font-bold">Meta ID</th><th className="px-2 py-2.5 font-bold">Status</th><th className="px-4 py-2.5"></th>
+                                        <th className="px-4 py-2.5 font-bold sticky left-0 bg-white z-10">Weight</th><th className="px-2 py-2.5 font-bold">Price</th><th className="px-2 py-2.5 font-bold">Stock</th><th className="px-2 py-2.5 font-bold">Order qty</th><th className="px-2 py-2.5 font-bold">Meta ID</th><th className="px-2 py-2.5 font-bold">Status</th><th className="px-4 py-2.5"></th>
                                     </tr></thead>
                                     <tbody>
                                         {rows.map((v, i) => {
@@ -258,9 +262,10 @@ export default function ProductsPage() {
                                             const set = (k, val) => setDraftVariants(d => d.map((r, j) => j === i ? { ...r, [k]: val } : r));
                                             return (
                                                 <tr key={v.variant_id || i} className={`border-t border-stone-100 ${v.is_active === false ? 'opacity-50' : ''}`}>
-                                                    <td className="px-4 py-2.5 font-semibold">{editing ? (
-                                                        <span className="flex gap-1.5">
-                                                            <select value={weightValue(v)} onChange={e => set('weight', e.target.value)} className="border border-stone-200 rounded-lg px-2 py-1.5 text-sm bg-white">{WEIGHT_PRESETS.map(w => <option key={w}>{w}</option>)}</select>
+                                                    <td className="px-4 py-2.5 font-semibold sticky left-0 bg-white z-10">{editing ? (
+                                                        <span className="flex gap-1.5 flex-wrap">
+                                                            <select value={weightValue(v)} onChange={e => { set('weight', e.target.value); if (e.target.value !== 'Custom…') set('customWeight', ''); }} className="border border-stone-200 rounded-lg px-2 py-1.5 text-sm bg-white">{WEIGHT_PRESETS.map(w => <option key={w}>{w}</option>)}</select>
+                                                            {weightValue(v) === 'Custom…' && <input value={v.customWeight || ''} onChange={e => set('customWeight', e.target.value)} placeholder="e.g. 750 gm" className="border border-stone-200 rounded-lg px-2 py-1.5 text-sm bg-white w-24" />}
                                                         </span>
                                                     ) : (v.weight || v.weight_label)}</td>
                                                     <td className="px-2 py-2.5">{editing ? <input type="number" min="1" value={v.price} onChange={e => set('price', e.target.value)} className="w-20 border border-stone-200 rounded-lg px-2 py-1.5 text-sm" /> : `₹${v.price}`}</td>
@@ -289,7 +294,7 @@ export default function ProductsPage() {
                             </div>
                             {editing && (
                                 <div className="p-3 border-t border-stone-100 bg-stone-50/60">
-                                    <button onClick={() => setDraftVariants(d => [...d, { weight: '500 gm', price: '', stock: 100, min_qty: 1, max_qty: 20, qty_step: 1, sku: '', retailer_id: '', is_active: true }])} className="text-xs font-bold text-emerald-700 hover:underline">+ Add weight option</button>
+                                    <button onClick={() => setDraftVariants(d => [...d, { weight: '500 gm', customWeight: '', price: '', stock: 100, min_qty: 1, max_qty: 20, qty_step: 1, sku: '', retailer_id: '', is_active: true }])} className="text-xs font-bold text-emerald-700 hover:underline">+ Add weight option</button>
                                 </div>
                             )}
                         </div>
