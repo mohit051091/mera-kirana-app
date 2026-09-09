@@ -192,7 +192,8 @@ async function promptAddressStep(from, customerId, metadata, cartId) {
         buttons.push({ id: 'btn_change_addr', title: '📍 Add New Address' });
         await whatsappService.sendButtons(from, '🏠 *Deliver to saved address?*', buttons);
     } else {
-        await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*');
+        // Phone is prefilled with their own WhatsApp number — they only type the address.
+        await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
     }
 }
 
@@ -1432,7 +1433,7 @@ Rules:
                     await sendSlotList(from, addrId, metadata, cartId);
 
                 } else if (buttonId === 'btn_change_addr') {
-                    await whatsappService.sendAddressMessage(from, "🏠 *Enter Delivery Address*");
+                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
 
                 } else if (buttonId.startsWith('btn_slot_select_')) {
                     const slotName = buttonId.replace('btn_slot_select_', '');
@@ -1769,7 +1770,7 @@ Rules:
                 }
 
                 if (listId === 'btn_change_addr') {
-                    await whatsappService.sendAddressMessage(from, "🏠 *Enter Delivery Address*");
+                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
                     await whatsappService.markAsRead(messageId);
                     return;
                 } else if (listId.startsWith('btn_slot_select_')) {
@@ -1840,11 +1841,9 @@ Rules:
                 metadata.stage = 'DELIVERY_SLOT_SELECTION';
                 await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
 
-                // Prompt delivery slot select
-                const buttons = [
-                    { id: 'btn_addr_select_' + newAddr.rows[0].address_id, title: '🚚 Process Delivery Slot' }
-                ];
-                await whatsappService.sendButtons(from, "✅ *Address Saved!* Tap button below to choose delivery slot:", buttons);
+                // Prompt delivery slot select directly (no extra tap)
+                await whatsappService.sendText(from, '✅ *Address Saved!*');
+                await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
                 await whatsappService.markAsRead(messageId);
                 return;
             }
