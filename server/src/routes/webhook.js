@@ -102,6 +102,59 @@ function itemToGrams(item) {
     return null;
 }
 
+// Helper: local transcript parser (no LLM). Used when Gemini is down/overloaded.
+// Handles "200 grams of paneer, 2 kg of mawa, 5 PM, <street>, <6-digit pin>".
+function localParseTranscript(transcript) {
+    if (!transcript) return null;
+    const t = String(transcript);
+    const lower = t.toLowerCase();
+    const out = { items: [], address: { street: null, pincode: null }, delivery_slot: { date: null, slot: null } };
+
+    const SYNONYMS = [
+        { keys: ['paneer', 'cottage cheese'], name: 'Paneer' },
+        { keys: ['mawa', 'khoya', 'khoa', 'mava', 'khova'], name: 'Mawa' },
+        { keys: ['milk', 'doodh', 'dudh'], name: 'Milk' },
+        { keys: ['curd', 'dahi', 'yogurt', 'yoghurt'], name: 'Curd' },
+        { keys: ['ghee', 'clarified butter'], name: 'Clarified Butter' },
+    ];
+    const prodName = (chunk) => {
+        const c = chunk.toLowerCase();
+        for (const s of SYNONYMS) if (s.keys.some(k => c.includes(k))) return s.name;
+        return null;
+    };
+
+    // Split on commas/plus/and-then boundaries, keep numbers attached
+    const chunks = t.split(/,|\bplus\b|\baur\b|\band then\b/i);
+    for (const ch of chunks) {
+        const m = ch.match(/([\d.]+)\s*(kg|kilos?|grams?|gms?|\bg\b|litres?|liters?|ltrs?|\bl\b|packets?|pieces?|pcs?)?\s*(?:of\s+)?(.+)?/i);
+        if (!m) continue;
+        const name = prodName(m[3] || '');
+        if (!name) continue;
+        const rawU = (m[2] || 'packets').toLowerCase();
+        let unit = 'packets';
+        if (/^kg|kilo/.test(rawU)) unit = 'kg';
+        else if (/^gram|^gm$|^\bg\b/.test(rawU)) unit = 'grams';
+        else if (/^lit|^ltr|^\bl\b/.test(rawU)) unit = 'litres';
+        else if (/^piece|^pcs/.test(rawU)) unit = 'pieces';
+        out.items.push({ name, qty_value: parseFloat(m[1]), qty_unit: unit });
+    }
+
+    const pin = t.match(/\b\d{6}\b/);
+    if (pin) {
+        out.address.pincode = pin[0];
+        out.address.street = t.replace(pin[0], '').split(/,|\./).map(s => s.trim()).filter(s => s && !/^\d+\s*(am|pm)$/i.test(s) && !/morning|evening|noon|afternoon/i.test(s)).slice(-2).join(', ') || null;
+    }
+    if (/\bjaldi\b|urgent|asap|10\s*min|abhi\b/.test(lower)) out.delivery_slot.slot = 'express';
+    else if (/morning/.test(lower)) out.delivery_slot.slot = 'morning';
+    else if (/noon|afternoon/.test(lower)) out.delivery_slot.slot = 'noon';
+    else if (/evening|night|\bpm\b/.test(lower)) out.delivery_slot.slot = 'evening';
+    if (/\btomorrow\b|\bkal\b/.test(lower)) out.delivery_slot.date = 'tomorrow';
+    else if (out.delivery_slot.slot) out.delivery_slot.date = 'today';
+    if (!out.delivery_slot.slot) out.delivery_slot = { date: null, slot: null };
+
+    return (out.items.length || out.address.pincode || (out.delivery_slot && out.delivery_slot.slot)) ? out : null;
+}
+
 // Helper: calculate cart subtotal with voice cost markup
 async function getCartSubtotal(cartId) {
     const totalRes = await db.query(`
@@ -858,8 +911,9 @@ router.post('/whatsapp', async (req, res) => {
                     return;
                 }
 
-                // Step 2: Use Gemini to parse rawTranscript into JSON schema
+                // Step 2: Use Gemini to parse rawTranscript into JSON schema (2 tries, then local parser)
                 if (geminiKey) {
+                    for (let attempt = 1; attempt <= 2 && !voiceParsed; attempt++) {
                     try {
                         const genAI = new GoogleGenerativeAI(geminiKey);
                         const model = genAI.getGenerativeModel({
@@ -908,7 +962,14 @@ Rules:
                         console.log('Gemini voice structural extraction results:', voiceParsed);
                     } catch (structErr) {
                         logError(structErr, 'Gemini_structural_extraction_failed');
+                        if (attempt < 2) await new Promise(r => setTimeout(r, 2000 * attempt));
                     }
+                    }
+                }
+                // Last resort: local regex parser (no LLM) so overloads never silence the bot
+                if (!voiceParsed && rawTranscript) {
+                    voiceParsed = localParseTranscript(rawTranscript);
+                    if (voiceParsed) console.log('Local transcript parse fallback used:', JSON.stringify(voiceParsed));
                 }
                 
                 if (!voiceParsed) {
