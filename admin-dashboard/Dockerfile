@@ -1,13 +1,15 @@
-# Owner Studio (Next.js) — forces Railway to build Node, not static files.
+# Owner Studio (Next.js).
+# NOTE: Railway builds with repo-root context (Dockerfile at admin-dashboard/Dockerfile),
+# so all COPY paths below are prefixed with admin-dashboard/.
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY admin-dashboard/package.json admin-dashboard/package-lock.json ./
 RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+COPY admin-dashboard/. .
 # NEXT_PUBLIC_* is baked at build time; set in Railway Variables before building.
 RUN npm run build
 
