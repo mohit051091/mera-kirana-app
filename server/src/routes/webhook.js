@@ -973,7 +973,13 @@ Rules:
                 }
                 
                 if (!voiceParsed) {
-                    await whatsappService.sendText(from, "Sorry, I couldn't process your voice order. Please try again or type your message.");
+                    const heard = rawTranscript ? `\n\n👂 *I heard:* "${String(rawTranscript).slice(0, 200)}"` : '';
+                    await whatsappService.sendText(from, `Sorry, I couldn't piece together that order.${heard}\n\nPlease send the voice note again — slowly, with weight, address + pincode.`);
+                    const buttons = [
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] }
+                    ];
+                    await whatsappService.sendButtons(from, TRANSLATIONS.FALLBACK[userLang], buttons);
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
@@ -1139,10 +1145,17 @@ Rules:
                     }
 
                     await whatsappService.sendText(from, `${updateMsg}\nTo proceed with checkout, please select:`);
-                    const buttons = [
-                        { id: 'btn_checkout', title: '💳 Checkout Now' },
-                        { id: 'btn_products', title: '🛍️ Add More' }
-                    ];
+                    const addrBtn = { id: 'btn_set_address', title: '📍 Set Address' };
+                    const buttons = !metadata.address_id
+                        ? [
+                            { id: 'btn_checkout', title: '💳 Checkout Now' },
+                            addrBtn,
+                            { id: 'btn_products', title: '🛍️ Add More' }
+                        ]
+                        : [
+                            { id: 'btn_checkout', title: '💳 Checkout Now' },
+                            { id: 'btn_products', title: '🛍️ Add More' }
+                        ];
                     await whatsappService.sendButtons(from, "What would you like to do next?", buttons);
                     await whatsappService.markAsRead(messageId);
                     return;
@@ -1587,7 +1600,7 @@ Rules:
                     const addrId = buttonId.replace('btn_addr_select_', '');
                     await sendSlotList(from, addrId, metadata, cartId);
 
-                } else if (buttonId === 'btn_change_addr') {
+                } else if (buttonId === 'btn_change_addr' || buttonId === 'btn_set_address') {
                     await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
 
                 } else if (buttonId.startsWith('btn_slot_select_')) {
