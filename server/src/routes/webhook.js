@@ -713,7 +713,7 @@ router.post('/whatsapp', async (req, res) => {
                     return;
                 }
 
-                // 6.2 Check duplicate hash de-duplication
+                // 6.2 Check duplicate hash de-duplication (exclude THIS message's own log row)
                 const sha256 = msg.audio ? msg.audio.sha256 : null;
                 if (sha256) {
                     const recentDuplicateRes = await db.query(`
@@ -721,9 +721,10 @@ router.post('/whatsapp', async (req, res) => {
                         FROM conversation_logs 
                         WHERE customer_phone = $1 
                           AND created_at > NOW() - INTERVAL '1 minute'
+                          AND message_id != $3
                           AND metadata->'audio'->>'sha256' = $2
                         LIMIT 1
-                    `, [from, sha256]);
+                    `, [from, sha256, messageId]);
                     
                     if (recentDuplicateRes.rowCount > 0) {
                         console.log(`Duplicate voice note hash detected from ${from}, skipping.`);
