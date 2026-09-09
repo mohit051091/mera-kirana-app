@@ -325,6 +325,18 @@ async function sendSlotList(from, addrId, metadata, cartId) {
     await whatsappService.sendList(from, 'Select Delivery Slot', listBody, 'Choose Slot', sections);
 }
 
+// Helper: prefill for Meta's address form (fields can't be hidden — only prefilled).
+// Name from pushname/CRM, phone = sender number. Customer ideally types only the street.
+async function addressFormValues(customerId, from) {
+    const values = { phone_number: from };
+    try {
+        const r = await db.query('SELECT name FROM customers WHERE customer_id = $1', [customerId]);
+        const nm = r.rows[0]?.name;
+        if (nm && nm !== 'WhatsApp User') values.name = String(nm).slice(0, 50);
+    } catch { /* prefill best-effort */ }
+    return values;
+}
+
 // Helper: address step — 1 saved address skips straight to slots (no question asked)
 async function promptAddressStep(from, customerId, metadata, cartId) {
     metadata.stage = 'ADDRESS_SELECTION';
@@ -341,8 +353,8 @@ async function promptAddressStep(from, customerId, metadata, cartId) {
         buttons.push({ id: 'btn_change_addr', title: '📍 Add New Address' });
         await whatsappService.sendButtons(from, '🏠 *Deliver to saved address?*', buttons);
     } else {
-        // Phone is prefilled with their own WhatsApp number — they only type the address.
-        await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
+        // Name + phone prefilled from backend — customer types only the street.
+        await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', await addressFormValues(customerId, from));
     }
 }
 
@@ -488,8 +500,11 @@ router.post('/whatsapp', async (req, res) => {
     if (!body.object) return;
 
     if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
-        const msg = body.entry[0].changes[0].value.messages[0];
+        const value = body.entry[0].changes[0].value;
+        const msg = value.messages[0];
         const from = msg.from;
+        // WhatsApp profile name (pushname) — used for address-form prefill + CRM
+        const pushName = (value.contacts && value.contacts[0] && value.contacts[0].profile && value.contacts[0].profile.name) || null;
         if (activeUserLocks.has(from)) {
             console.log(`[CONCURRENCY LOCK] Request for ${from} is already in progress. Skipping to prevent race conditions.`);
             return;
@@ -589,11 +604,16 @@ router.post('/whatsapp', async (req, res) => {
             let dndActive = false;
 
             const upsertCust = await db.query(`
-                INSERT INTO customers (phone, name) 
-                VALUES ($1, $2) 
-                ON CONFLICT (phone) DO UPDATE SET last_active = NOW() 
-                RETURNING customer_id, dnd_active, language
-            `, [from, 'WhatsApp User']);
+                INSERT INTO customers (phone, name)
+                VALUES ($1, $2)
+                ON CONFLICT (phone) DO UPDATE SET last_active = NOW()
+                RETURNING customer_id, dnd_active, language, name
+            `, [from, pushName || 'WhatsApp User']);
+            // Adopt pushname once (never overwrite a real saved name with it)
+            if (pushName && (!upsertCust.rows[0].name || upsertCust.rows[0].name === 'WhatsApp User')) {
+                await db.query('UPDATE customers SET name = $1 WHERE customer_id = $2', [pushName.slice(0, 100), upsertCust.rows[0].customer_id]);
+                upsertCust.rows[0].name = pushName.slice(0, 100);
+            }
             
             customerId = upsertCust.rows[0].customer_id;
             dndActive = upsertCust.rows[0].dnd_active;
@@ -1679,7 +1699,7 @@ Rules:
                     await sendSlotList(from, addrId, metadata, cartId);
 
                 } else if (buttonId === 'btn_change_addr' || buttonId === 'btn_set_address') {
-                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
+                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', await addressFormValues(customerId, from));
 
                 } else if (buttonId.startsWith('btn_slot_select_')) {
                     const slotName = buttonId.replace('btn_slot_select_', '');
@@ -2016,7 +2036,7 @@ Rules:
                 }
 
                 if (listId === 'btn_change_addr') {
-                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', { phone_number: '+' + from });
+                    await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*', await addressFormValues(customerId, from));
                     await whatsappService.markAsRead(messageId);
                     return;
                 } else if (listId.startsWith('btn_slot_select_')) {
