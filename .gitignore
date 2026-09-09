@@ -8,7 +8,8 @@ build/
 npm-debug.log
 logs.*.log
 logs.*.json
-*.json
+# NOTE: never add a blanket *.json rule here — it silently drops package.json
+# manifests and breaks Railway builds (incident 2026-09-10).
 pincodes.csv
 rzp-key.csv
 graphify-out/
