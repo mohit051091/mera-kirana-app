@@ -90,6 +90,7 @@ function itemToGrams(item) {
         if (!v || v <= 0) return null;
         const u = String(item.qty_unit).toLowerCase();
         if (u.startsWith('kg')) return Math.round(v * 1000);
+        if (u.startsWith('lit') || u === 'l' || u.startsWith('ltr')) return Math.round(v * 1000); // litres ~ grams for milk
         if (u.startsWith('gram') || u === 'g' || u.startsWith('gm')) return Math.round(v);
         return null; // packets/pieces → count fallback
     }
@@ -871,7 +872,7 @@ You are a structured parser for a kirana dairy shop. You extract order items, ad
 You MUST output a raw JSON object matching this schema ONLY.
 
 {
-  "items": [{"name": "string", "qty_value": "number", "qty_unit": "grams|kg|packets|pieces"}],
+  "items": [{"name": "string", "qty_value": "number", "qty_unit": "grams|kg|litres|packets|pieces"}],
   "address": {"street": "string", "pincode": "string"},
   "delivery_slot": {"date": "string", "slot": "string"}
 }
@@ -888,14 +889,16 @@ Quantity mapping (output qty_value + qty_unit, NEVER convert yourself):
 - "pao kilo" / "quarter kg" = {"qty_value": 250, "qty_unit": "grams"}
 - "200 grams paneer" = {"name": "Paneer", "qty_value": 200, "qty_unit": "grams"}
 - "1 kg mawa" = {"name": "Mawa", "qty_value": 1, "qty_unit": "kg"}
+- "1 litre milk" / "1 ltr doodh" = {"qty_value": 1, "qty_unit": "litres"}
 - "ek packet" / "2 packets" = {"qty_value": 1|2, "qty_unit": "packets"} (no weight mentioned)
 - No quantity mentioned = {"qty_value": 1, "qty_unit": "packets"}
 
 Rules:
 1. Map items to catalog names. If empty/unclear, set items to [].
 2. Extract address and 6-digit postal pincode.
-3. Extract slots. Date should be "today" or "tomorrow". Slot must be "morning", "noon", or "evening".
+3. Extract slots. Date is "today" or "tomorrow". Slot is "morning", "noon", "evening", or "express" (only for urgent words: jaldi, urgent, asap, 10 minutes, abhi). "Tomorrow ..." → date "tomorrow" with morning/evening.
 4. If a field is not mentioned, set it to null.
+5. Field ORDER NEVER MATTERS: product-first, address-first, or slot-first all parse identically — extract every field you find, wherever it appears.
 `;
                         const response = await model.generateContent([
                             { text: rawTranscript },
