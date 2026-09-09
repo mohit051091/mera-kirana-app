@@ -272,23 +272,31 @@ const sendAudio = (to, linkOrId) => {
 
 const downloadMedia = async (mediaId) => {
     try {
+        const { token } = getApiConfig();
         const mediaInfo = await axios.get(`https://graph.facebook.com/v17.0/${mediaId}`, {
-            headers: { 'Authorization': `Bearer ${TOKEN}` }
+            timeout: 15000,
+            headers: { 'Authorization': `Bearer ${token}` }
         });
         const mediaUrl = mediaInfo.data.url;
         const response = await axios.get(mediaUrl, {
-            headers: { 'Authorization': `Bearer ${TOKEN}` },
+            timeout: 30000,
+            maxContentLength: 10 * 1024 * 1024,
+            maxBodyLength: 10 * 1024 * 1024,
+            headers: { 'Authorization': `Bearer ${token}` },
             responseType: 'arraybuffer'
         });
         return { buffer: Buffer.from(response.data), mimeType: mediaInfo.data.mime_type };
     } catch (error) {
-        console.error('Error downloading Meta media:', error);
+        logError(error, 'downloadMedia');
         throw error;
     }
 };
 
 const uploadMedia = async (buffer, filename, mimeType) => {
     try {
+        const phoneId = process.env.WHATSAPP_PHONE_ID;
+        const { token } = getApiConfig();
+        if (!phoneId) throw new Error('WHATSAPP_PHONE_ID missing');
         const formData = new FormData();
         formData.append('messaging_product', 'whatsapp');
         const blob = new Blob([buffer], { type: mimeType });
@@ -296,17 +304,18 @@ const uploadMedia = async (buffer, filename, mimeType) => {
         formData.append('type', mimeType);
 
         const response = await axios.post(
-            `https://graph.facebook.com/v17.0/${WHATSAPP_PHONE_ID}/media`,
+            `https://graph.facebook.com/v17.0/${phoneId}/media`,
             formData,
             {
+                timeout: 30000,
                 headers: {
-                    'Authorization': `Bearer ${TOKEN}`
+                    'Authorization': `Bearer ${token}`
                 }
             }
         );
         return response.data.id;
     } catch (error) {
-        console.error('Error uploading Meta media:', error.response?.data || error.message);
+        logError(error, 'uploadMedia');
         throw error;
     }
 };
