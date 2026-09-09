@@ -1132,6 +1132,13 @@ Rules:
                     if (addedLines.length > 0) {
                         updateMsg = `✅ *Added to cart:*\n${addedLines.join('\n')}\n_Subtotal: ₹${subtotal.toFixed(2)}_`;
                         if (skippedLines.length > 0) updateMsg += `\n\n⚠️ _Couldn't add:_\n${skippedLines.join('\n')}`;
+                        // Street heard but no pincode: ask ONLY the pin (one word), not the whole address
+                        if (!metadata.address_id && voiceParsed.address?.street && !voiceParsed.address?.pincode) {
+                            updateMsg += `\n\n📍 *Almost done!* Just reply with your 6-digit pincode (e.g. 400078) — no need to repeat the address.`;
+                            metadata.stage = 'ADDRESS_SELECTION';
+                            metadata.pending_street = voiceParsed.address.street;
+                            await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                        }
                     } else if (skippedLines.length > 0) {
                         updateMsg = `⚠️ *Couldn't match your items:*\n${skippedLines.join('\n')}\n\nTry our pack sizes or type the item name.`;
                     } else if (voiceParsed.items && voiceParsed.items.length > 0) {
@@ -2139,7 +2146,13 @@ Rules:
                     }
                     
                     await db.query('UPDATE addresses SET is_default = false WHERE customer_id = $1', [customerId]);
-                    const newAddr = await db.query('INSERT INTO addresses (customer_id, address_text, pincode, is_default) VALUES ($1, $2, $3, true) RETURNING address_id', [customerId, text, pin]);
+                    // If voice already captured the street, combine it with the pin-only reply
+                    const streetPrefix = metadata.pending_street ? metadata.pending_street + ', ' : '';
+                    const fullText = streetPrefix ? streetPrefix + pin : text;
+                    const newAddr = await db.query('INSERT INTO addresses (customer_id, address_text, pincode, is_default) VALUES ($1, $2, $3, true) RETURNING address_id', [customerId, fullText, pin]);
+                    
+                    metadata.address_id = newAddr.rows[0].address_id;
+                    delete metadata.pending_street;
                     
                     metadata.address_id = newAddr.rows[0].address_id;
                     await whatsappService.sendText(from, "✅ *Address Saved!*");
