@@ -89,7 +89,7 @@ function itemToGrams(item) {
         const v = parseFloat(item.qty_value);
         if (!v || v <= 0) return null;
         const u = String(item.qty_unit).toLowerCase();
-        if (u.startsWith('kg')) return Math.round(v * 1000);
+        if (/^kgs?|^kilo/.test(u)) return Math.round(v * 1000);
         if (u.startsWith('lit') || u === 'l' || u.startsWith('ltr')) return Math.round(v * 1000); // litres ~ grams for milk
         if (u.startsWith('gram') || u === 'g' || u.startsWith('gm')) return Math.round(v);
         return null; // packets/pieces → count fallback
@@ -102,13 +102,55 @@ function itemToGrams(item) {
     return null;
 }
 
+// Helper: English number words → digits ("two hundred fifty" → "250") so STT word-form works.
+function wordsToDigits(text) {
+    const ONES = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, a: 1, an: 1 };
+    const TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+    const out = [];
+    const words = String(text).toLowerCase().split(/(\s+|[,])/);
+    let i = 0;
+    const isNumWord = (w) => ONES[w] != null || TENS[w] != null || w === 'hundred' || w === 'thousand' || w === 'half' || w === 'quarter';
+    while (i < words.length) {
+        const w = words[i].toLowerCase();
+        if (isNumWord(w)) {
+            let total = 0, cur = 0, consumed = 0;
+            if (w === 'half') { total = 0.5; consumed = 1; }
+            else if (w === 'quarter') { total = 0.25; consumed = 1; }
+            else {
+                let j = i;
+                while (j < words.length) {
+                    const x = words[j].toLowerCase();
+                    if (ONES[x] != null) { cur += ONES[x]; j++; }
+                    else if (TENS[x] != null) { cur += TENS[x]; j++; }
+                    else if (x === 'hundred') { cur = (cur || 1) * 100; j++; }
+                    else if (x === 'thousand') { total += (cur || 1) * 1000; cur = 0; j++; }
+                    else if (/^\s+$/.test(words[j]) || words[j] === '-') { j++; }
+                    else break;
+                }
+                total += cur;
+                consumed = j - i;
+            }
+            // Only replace when followed by a unit word (avoid mangling addresses like "3103")
+            const after = words.slice(i + consumed).join('').trim().split(/\s+/)[0] || '';
+            if (/^(kg|kilos?|grams?|gms?|g\b|litres?|liters?|ltrs?|l\b|packets?|pieces?|pcs?|kilos?\b)/i.test(after)) {
+                out.push(String(total));
+                i += consumed;
+                continue;
+            }
+            out.push(words[i]);
+            i++;
+        } else { out.push(words[i]); i++; }
+    }
+    return out.join('');
+}
+
 // Helper: local transcript parser (no LLM). Used when Gemini is down/overloaded.
 // Handles "200 grams of paneer, 2 kg of mawa, 5 PM, <street>, <6-digit pin>".
 function localParseTranscript(transcript) {
     if (!transcript) return null;
-    const t = String(transcript);
+    const t = wordsToDigits(transcript);
     const lower = t.toLowerCase();
-    const out = { items: [], address: { street: null, pincode: null }, delivery_slot: { date: null, slot: null } };
+    const out = { items: [], unknown: [], address: { street: null, pincode: null }, delivery_slot: { date: null, slot: null } };
 
     const SYNONYMS = [
         { keys: ['paneer', 'cottage cheese'], name: 'Paneer' },
@@ -126,10 +168,15 @@ function localParseTranscript(transcript) {
     // Split on commas/plus/and-then boundaries, keep numbers attached
     const chunks = t.split(/,|\bplus\b|\baur\b|\band then\b/i);
     for (const ch of chunks) {
-        const m = ch.match(/([\d.]+)\s*(kg|kilos?|grams?|gms?|\bg\b|litres?|liters?|ltrs?|\bl\b|packets?|pieces?|pcs?)?\s*(?:of\s+)?(.+)?/i);
+        const m = ch.match(/([\d.]+)\s*(kgs?|kilos?|kilograms?|grams?|gms?|\bg\b|litres?|liters?|ltrs?|\bl\b|packets?|pieces?|pcs?)?\s*(?:of\s+)?(.+)?/i);
         if (!m) continue;
         const name = prodName(m[3] || '');
-        if (!name) continue;
+        if (!name) {
+            // Audible item we don't sell (e.g. "3 kilograms of gram flour") — surface it, don't swallow it
+            const said = ch.trim().replace(/\s+/g, ' ').slice(0, 40);
+            if (said && /paneer|mawa|khoya|milk|doodh|curd|dahi|ghee|besan|flour|atta|sugar|rice/i.test(said)) out.unknown.push(said);
+            continue;
+        }
         const rawU = (m[2] || 'packets').toLowerCase();
         let unit = 'packets';
         if (/^kg|kilo/.test(rawU)) unit = 'kg';
@@ -1012,6 +1059,10 @@ Rules:
             const addedLines = [];   // grouped display: "Mawa 1 kg = 2 x 500 gm"
             const skippedLines = []; // honest failures with available sizes
             if (voiceParsed) {
+                // Local parser may flag audible items we don't sell — say so openly
+                for (const u of (voiceParsed.unknown || [])) {
+                    skippedLines.push(`• ${u} — not on our menu yet`);
+                }
                 // Parse items (weight-aware: decompose into available packs)
                 if (voiceParsed.items && voiceParsed.items.length > 0) {
                     for (const item of voiceParsed.items) {
