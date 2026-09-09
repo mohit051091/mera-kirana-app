@@ -1027,7 +1027,7 @@ Rules:
                             skippedLines.push(`• ${item.name} — not on our menu`);
                             continue;
                         }
-                        const variants = resVar.rows.map(r => ({
+                        const variants = varRes.rows.map(r => ({
                             variant_id: r.variant_id,
                             grams: weightToGrams(r.weight_label),
                             price: parseFloat(r.price),
