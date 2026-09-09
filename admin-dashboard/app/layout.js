@@ -3,7 +3,7 @@ import './globals.css';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
-import { LayoutDashboard, BarChart2, ShoppingBag, Package, Users, Settings, LogOut, Megaphone, Menu, X, Calendar, Truck, Ticket, Store } from 'lucide-react';
+import { LayoutDashboard, BarChart2, ShoppingBag, Package, Users, Settings, LogOut, Megaphone, Menu, X, Calendar, Truck, Ticket, Store, BookOpen } from 'lucide-react';
 
 const GROUPS = [
     {
@@ -27,6 +27,7 @@ const GROUPS = [
             { href: '/partners', icon: Truck, label: 'Delivery Team' },
             { href: '/salespeople', icon: Users, label: 'Sales Agents' },
             { href: '/settings', icon: Settings, label: 'Settings' },
+            { href: '/guide', icon: BookOpen, label: 'Manual' },
         ]
     },
 ];
