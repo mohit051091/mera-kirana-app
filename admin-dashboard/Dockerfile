@@ -1,15 +1,15 @@
 # Owner Studio (Next.js).
-# NOTE: Railway builds with repo-root context (Dockerfile at admin-dashboard/Dockerfile),
-# so all COPY paths below are prefixed with admin-dashboard/.
+# Railway Root Directory = admin-dashboard, so context IS this folder:
+# all COPY paths below are relative to it.
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY admin-dashboard/package.json admin-dashboard/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY admin-dashboard/. .
+COPY . .
 # NEXT_PUBLIC_* is baked at build time; set in Railway Variables before building.
 RUN npm run build
 
