@@ -1013,7 +1013,7 @@ Rules:
                             WHERE p.base_name ILIKE '%' || $1 || '%' AND pv.is_active = true
                             ORDER BY pv.price ASC
                         `, [item.name]);
-                        if (resVar.rows.length === 0) {
+                        if (varRes.rows.length === 0) {
                             skippedLines.push(`• ${item.name} — not on our menu`);
                             continue;
                         }
