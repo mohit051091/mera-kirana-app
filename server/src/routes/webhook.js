@@ -804,7 +804,12 @@ router.post('/whatsapp', async (req, res) => {
                 const dailyCount = parseInt(dailyCountRes.rows[0].count);
                 
                 if (hourlyCount >= hourlyLimit) {
-                    await whatsappService.sendText(from, `⚠️ *Limit Exceeded*\n\nYou have sent too many voice notes recently. Please type your message instead, or try again in an hour.`);
+                    await whatsappService.sendText(from, `⚠️ *Limit Exceeded*\n\nYou have sent too many voice notes recently. Please use the buttons below, or try a voice note again in an hour.`);
+                    const buttons = [
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] }
+                    ];
+                    await whatsappService.sendButtons(from, TRANSLATIONS.FALLBACK[userLang], buttons);
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
@@ -906,7 +911,12 @@ router.post('/whatsapp', async (req, res) => {
                 }
 
                 if (!rawTranscript) {
-                    await whatsappService.sendText(from, "Sorry, I couldn't transcribe your voice note. Please try again or type your message.");
+                    await whatsappService.sendText(from, "Sorry, I couldn't hear that clearly. Please send the voice note again — slowly.");
+                    const buttons = [
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                        { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] }
+                    ];
+                    await whatsappService.sendButtons(from, TRANSLATIONS.FALLBACK[userLang], buttons);
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
@@ -1140,13 +1150,23 @@ Rules:
                             await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
                         }
                     } else if (skippedLines.length > 0) {
-                        updateMsg = `⚠️ *Couldn't match your items:*\n${skippedLines.join('\n')}\n\nTry our pack sizes or type the item name.`;
+                        updateMsg = `⚠️ *Couldn't match your items:*\n${skippedLines.join('\n')}\n\nTap below to browse the catalog — exact pack sizes are all there.`;
                     } else if (voiceParsed.items && voiceParsed.items.length > 0) {
                         updateMsg = `✅ *Items Added to Cart!* (Subtotal: ₹${subtotal.toFixed(2)})`;
                     } else if (voiceParsed.address && voiceParsed.address.pincode) {
                         updateMsg = `📍 *Delivery Address Saved!* (Pincode: ${voiceParsed.address.pincode})`;
                     } else if (voiceParsed.delivery_slot && voiceParsed.delivery_slot.slot) {
                         updateMsg = `📅 *Delivery Slot Saved!* (${voiceParsed.delivery_slot.slot} on ${voiceParsed.delivery_slot.date})`;
+                    } else if ((!voiceParsed.items || voiceParsed.items.length === 0) && !addedLines.length) {
+                        // Nothing usable at all: point at the catalog, not checkout
+                        await whatsappService.sendText(from, `${updateMsg || '👍 Got it!'}\nI couldn't catch an order in that note. The catalog has everything with exact sizes:`);
+                        const buttons = [
+                            { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] },
+                            { id: 'btn_orders', title: TRANSLATIONS.BTN_MY_ORDERS[userLang] }
+                        ];
+                        await whatsappService.sendButtons(from, TRANSLATIONS.FALLBACK[userLang], buttons);
+                        await whatsappService.markAsRead(messageId);
+                        return;
                     } else {
                         updateMsg = `👍 *Voice instructions parsed successfully!*`;
                     }
@@ -2140,7 +2160,12 @@ Rules:
                     const pinMaster = await db.query('SELECT 1 FROM pincode_master WHERE pincode = $1 AND is_allowed = true LIMIT 1', [pin]);
                     if (pinMaster.rows.length === 0) {
                         await logDropoff(customerId, 'ADDRESS', 'UNSERVICEABLE', `Unserviceable text pincode ${pin}`);
-                        await whatsappService.sendText(from, `Uh oh! We are not delivering to pincode *${pin}* yet. Please type another address containing a serviceable pincode.`);
+                        await whatsappService.sendText(from, `Uh oh! We are not delivering to pincode *${pin}* yet.`);
+                        const buttons = [
+                            { id: 'btn_change_addr', title: '📝 Try Another Address' },
+                            { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] }
+                        ];
+                        await whatsappService.sendButtons(from, 'Tap below to try a different address:', buttons);
                         await whatsappService.markAsRead(messageId);
                         return;
                     }
@@ -2153,12 +2178,15 @@ Rules:
                     
                     metadata.address_id = newAddr.rows[0].address_id;
                     delete metadata.pending_street;
-                    
-                    metadata.address_id = newAddr.rows[0].address_id;
                     await whatsappService.sendText(from, "✅ *Address Saved!*");
                     await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
                 } else {
-                    await whatsappService.sendText(from, "Please type a full delivery address including a valid 6-digit postal pincode (e.g., 400078) so we can check serviceability.");
+                    await whatsappService.sendText(from, "I need your delivery address with a 6-digit pincode — the form below is fastest (phone already filled):");
+                    const buttons = [
+                        { id: 'btn_change_addr', title: '📝 Address Form' },
+                        { id: 'btn_products', title: TRANSLATIONS.BTN_VIEW_PRODUCTS[userLang] }
+                    ];
+                    await whatsappService.sendButtons(from, 'Choose:', buttons);
                 }
                 await whatsappService.markAsRead(messageId);
                 return;
