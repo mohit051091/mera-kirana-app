@@ -89,7 +89,20 @@ router.get('/whatsapp', (req, res) => {
     }
 });
 
-// Helper to generate and send Delivery Slots List Message (including change address action)
+// Helper: express fee / scheduled-discount for a slot key
+async function getSlotAdjustments(slotKey, subtotal) {
+    let expressFee = 0, schedDiscount = 0, schedPct = 0;
+    if (slotKey === 'express') {
+        expressFee = parseFloat(await getSetting('express_fee', 30));
+    }
+    if (String(slotKey || '').startsWith('tomorrow_')) {
+        schedPct = parseFloat(await getSetting('scheduled_discount', 5));
+        if (schedPct > 0) schedDiscount = (subtotal * schedPct) / 100;
+    }
+    return { expressFee, schedDiscount, schedPct };
+}
+
+// Helper to generate and send Delivery Slots List Message (rider-aware capacity)
 async function sendSlotList(from, addrId, metadata, cartId) {
     metadata.address_id = addrId;
     metadata.stage = 'DELIVERY_SLOT_SELECTION';
@@ -99,48 +112,88 @@ async function sendSlotList(from, addrId, metadata, cartId) {
     const addrRes = await db.query('SELECT address_text FROM addresses WHERE address_id = $1', [addrId]);
     const addrText = addrRes.rows[0]?.address_text || 'Saved Address';
 
+    // Rider-aware capacity: available riders x per-rider max orders per slot
+    let availRiders = 0;
+    try {
+        const r = await db.query("SELECT COUNT(1) AS c FROM delivery_partners WHERE is_active = true AND current_status = 'AVAILABLE'");
+        availRiders = parseInt(r.rows[0]?.c || 0);
+    } catch { availRiders = 0; }
+    const perRider = Math.max(1, parseInt(await getSetting('rider_max_orders', 15)));
+    const legacyLimit = parseInt(await getSetting('rider_slot_limit', 10));
+    const capacity = availRiders > 0 ? availRiders * perRider : legacyLimit;
+
     const slots = [
         { key: 'morning', label: '🌅 Morning (6-8 AM)' },
         { key: 'noon', label: '☀️ Noon (12-2 PM)' },
         { key: 'evening', label: '🌇 Evening (5-7 PM)' }
     ];
-    
-    const limit = await getSetting('rider_slot_limit', 10);
+
     const slotRows = [];
+
+    // ⚡ Express (10-min) first when a rider is free
+    if (availRiders > 0) {
+        const expressFee = parseFloat(await getSetting('express_fee', 30));
+        slotRows.push({ id: 'btn_slot_select_express', title: `⚡ 10-min (+₹${expressFee})`.substring(0, 24) });
+    }
 
     for (const slot of slots) {
         const countRes = await db.query(
             "SELECT COUNT(1) FROM orders WHERE delivery_slot = $1 AND status != 'CANCELLED' AND created_at::date = CURRENT_DATE",
             [slot.label]
         );
-        if (parseInt(countRes.rows[0].count) < limit) {
+        if (parseInt(countRes.rows[0].count) < capacity) {
             slotRows.push({ id: `btn_slot_select_${slot.key}`, title: slot.label.substring(0, 24) });
         }
     }
 
-    if (slotRows.length === 0) {
-        slotRows.push(
-            { id: 'btn_slot_select_tomorrow_morning', title: '🌅 Tomorrow Morning' },
-            { id: 'btn_slot_select_tomorrow_evening', title: '🌇 Tomorrow Evening' }
-        );
-    }
+    // Tomorrow pre-order slots (scheduled discount applies)
+    const schedPct = parseFloat(await getSetting('scheduled_discount', 5));
+    const tmHint = schedPct > 0 ? ` (${schedPct}% off)` : '';
+    slotRows.push(
+        { id: 'btn_slot_select_tomorrow_morning', title: `🌅 Tomorrow AM${tmHint}`.substring(0, 24) },
+        { id: 'btn_slot_select_tomorrow_evening', title: `🌇 Tomorrow PM${tmHint}`.substring(0, 24) }
+    );
 
-    const listBody = `🏠 *Delivering to:* ${addrText}\n\nPlease select your preferred delivery timing slot:`;
-    
+    const riderNote = availRiders === 0
+        ? `\n\n⚠️ *All riders are busy right now* — only pre-order slots open.`
+        : '';
+
+    const listBody = `🏠 *Delivering to:* ${addrText}\n\nPlease select your preferred delivery timing slot:${riderNote}`;
+
     const sections = [
         {
-            title: "Available Timing",
+            title: 'Available Timing',
             rows: slotRows
         },
         {
-            title: "Fulfillment Location",
+            title: 'Fulfillment Location',
             rows: [
                 { id: 'btn_change_addr', title: '✍️ Change Delivery Address' }
             ]
         }
     ];
 
-    await whatsappService.sendList(from, "Select Delivery Slot", listBody, "Choose Slot", sections);
+    await whatsappService.sendList(from, 'Select Delivery Slot', listBody, 'Choose Slot', sections);
+}
+
+// Helper: address step — 1 saved address skips straight to slots (no question asked)
+async function promptAddressStep(from, customerId, metadata, cartId) {
+    metadata.stage = 'ADDRESS_SELECTION';
+    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+
+    const addressesRes = await db.query('SELECT address_id, address_text FROM addresses WHERE customer_id = $1 LIMIT 3', [customerId]);
+    if (addressesRes.rows.length === 1) {
+        await sendSlotList(from, addressesRes.rows[0].address_id, metadata, cartId);
+    } else if (addressesRes.rows.length > 1) {
+        const buttons = addressesRes.rows.map((addr) => ({
+            id: `btn_addr_select_${addr.address_id}`,
+            title: addr.address_text.substring(0, 20)
+        }));
+        buttons.push({ id: 'btn_change_addr', title: '📍 Add New Address' });
+        await whatsappService.sendButtons(from, '🏠 *Deliver to saved address?*', buttons);
+    } else {
+        await whatsappService.sendAddressMessage(from, '🏠 *Enter Delivery Address*');
+    }
 }
 
 // POST /webhook/whatsapp - Incoming Messages
@@ -1348,39 +1401,14 @@ Rules:
                         return;
                     }
 
-                    // Prompt Order type (One-time vs Subscription)
-                    metadata.stage = 'CHOOSE_ORDER_TYPE';
-                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
-
-                    const buttons = [
-                        { id: 'btn_choose_one_time', title: '🛍️ One-Time Delivery' },
-                        { id: 'btn_choose_subscribe', title: '🔄 Subscribe (Daily)' }
-                    ];
-                    await whatsappService.sendButtons(from, "Would you like this order as a one-time delivery or set up a recurring subscription?", buttons);
+                    // Skip order-type question: default ONE_TIME (subscribe offered after ordering).
+                    // Old sessions with CHOOSE_ORDER_TYPE buttons still work via handlers below.
+                    metadata.order_type = 'ONE_TIME';
+                    await promptAddressStep(from, customerId, metadata, cartId);
 
                 } else if (buttonId === 'btn_choose_one_time') {
                     metadata.order_type = 'ONE_TIME';
-                    metadata.stage = 'ADDRESS_SELECTION';
-                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
-
-                    // Check Saved addresses
-                    const addressesRes = await db.query('SELECT address_id, address_text FROM addresses WHERE customer_id = $1 LIMIT 3', [customerId]);
-                    if (addressesRes.rows.length === 1) {
-                        const addrId = addressesRes.rows[0].address_id;
-                        await sendSlotList(from, addrId, metadata, cartId);
-                    } else if (addressesRes.rows.length > 1) {
-                        const buttons = addressesRes.rows.map((addr) => ({
-                            id: `btn_addr_select_${addr.address_id}`,
-                            title: addr.address_text.substring(0, 20)
-                        }));
-                        buttons.push({ id: 'btn_change_addr', title: '📍 Add New Address' });
-                        await whatsappService.sendButtons(from, "🏠 *Deliver to saved address?*", buttons);
-                    } else {
-                        const buttons = [
-                            { id: 'btn_change_addr', title: '📝 Enter Address' }
-                        ];
-                        await whatsappService.sendButtons(from, "🏠 *Address Required* to complete delivery:", buttons);
-                    }
+                    await promptAddressStep(from, customerId, metadata, cartId);
 
                 } else if (buttonId === 'btn_choose_subscribe') {
                     metadata.order_type = 'SUBSCRIPTION';
@@ -1397,23 +1425,7 @@ Rules:
                 } else if (buttonId.startsWith('btn_freq_')) {
                     const freq = buttonId.replace('btn_freq_', '').toUpperCase();
                     metadata.frequency = freq;
-                    metadata.stage = 'ADDRESS_SELECTION';
-                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
-
-                    const addressesRes = await db.query('SELECT address_id, address_text FROM addresses WHERE customer_id = $1 LIMIT 3', [customerId]);
-                    if (addressesRes.rows.length === 1) {
-                        const addrId = addressesRes.rows[0].address_id;
-                        await sendSlotList(from, addrId, metadata, cartId);
-                    } else if (addressesRes.rows.length > 1) {
-                        const buttons = addressesRes.rows.map((addr) => ({
-                            id: `btn_addr_select_${addr.address_id}`,
-                            title: addr.address_text.substring(0, 20)
-                        }));
-                        buttons.push({ id: 'btn_change_addr', title: '📍 Add New' });
-                        await whatsappService.sendButtons(from, "🏠 *Deliver to saved address?*", buttons);
-                    } else {
-                        await whatsappService.sendAddressMessage(from, "🏠 *Address Required*");
-                    }
+                    await promptAddressStep(from, customerId, metadata, cartId);
 
                 } else if (buttonId.startsWith('btn_addr_select_')) {
                     const addrId = buttonId.replace('btn_addr_select_', '');
@@ -1434,10 +1446,18 @@ Rules:
                     const deliveryRules = await getSetting('delivery_fee_rules', { base_fee: 20, waive_threshold: 200, campaign_active: false });
                     const deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
 
+                    // Express fee + scheduled pre-order discount (shown here AND charged at placement)
+                    const slotAdj = await getSlotAdjustments(slotName, subtotal);
+                    const slotLine = slotName === 'express'
+                        ? `\n⚡ *Express 10-min:* +₹${slotAdj.expressFee.toFixed(2)}`
+                        : (slotAdj.schedDiscount > 0 ? `\n📅 *Pre-order ${slotAdj.schedPct}% off:* -₹${slotAdj.schedDiscount.toFixed(2)}` : '');
+                    const slotTotal = subtotal + deliveryFee + slotAdj.expressFee - slotAdj.schedDiscount;
+
                     const paymentText = TRANSLATIONS.BILL_SUMMARY[userLang]
                         .replace('$SUB', subtotal.toFixed(2))
                         .replace('$DEL', deliveryFee.toFixed(2))
-                        .replace('$TOT', (subtotal + deliveryFee).toFixed(2));
+                        .replace('$TOT', slotTotal.toFixed(2)) + slotLine +
+                        `\n\n🔄 _Want this daily? Order once, then tap Subscriptions._`;
                     
                     const buttons = [
                         { id: 'pay_upi', title: TRANSLATIONS.BTN_PAY_ONLINE[userLang] },
@@ -1471,6 +1491,11 @@ Rules:
                     let deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
                     
                     let finalTotal = subtotal + deliveryFee;
+
+                    // Express fee + tomorrow pre-order discount (matches slot preview + placement charge)
+                    const slotAdj3 = await getSlotAdjustments(metadata.slot, subtotal);
+                    if (slotAdj3.expressFee > 0) { finalTotal += slotAdj3.expressFee; itemsText += `• ⚡ Express 10-min: +₹${slotAdj3.expressFee.toFixed(2)}\n`; }
+                    if (slotAdj3.schedDiscount > 0) { finalTotal -= slotAdj3.schedDiscount; itemsText += `• 📅 Pre-order ${slotAdj3.schedPct}% off: -₹${slotAdj3.schedDiscount.toFixed(2)}\n`; }
 
                     // Apply coupon discount if set in session
                     if (metadata.coupon_code) {
@@ -1524,7 +1549,7 @@ Rules:
                         await whatsappService.markAsRead(messageId);
                         return;
                     }
-                    const ALLOWED_SLOTS = ['morning', 'noon', 'evening', 'tomorrow_morning', 'tomorrow_evening'];
+                    const ALLOWED_SLOTS = ['morning', 'noon', 'evening', 'express', 'tomorrow_morning', 'tomorrow_evening'];
                     if (!ALLOWED_SLOTS.includes(String(metadata.slot))) {
                         await whatsappService.sendText(from, "Invalid delivery slot. Please choose a slot again.");
                         await whatsappService.markAsRead(messageId);
@@ -1559,6 +1584,11 @@ Rules:
                         let deliveryFee = (subtotal >= deliveryRules.waive_threshold || deliveryRules.campaign_active) ? 0 : deliveryRules.base_fee;
                         
                         let finalTotal = subtotal + deliveryFee;
+
+                        // Express 10-min fee + tomorrow pre-order discount (must match preview)
+                        const slotAdj2 = await getSlotAdjustments(metadata.slot, subtotal);
+                        if (slotAdj2.expressFee > 0) finalTotal += slotAdj2.expressFee;
+                        if (slotAdj2.schedDiscount > 0) finalTotal -= slotAdj2.schedDiscount;
 
                         if (metadata.coupon_code) {
                             const couponRes = await client.query('SELECT discount_type, discount_value FROM coupons WHERE code = $1 AND is_active = true', [metadata.coupon_code]);

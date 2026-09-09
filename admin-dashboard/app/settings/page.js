@@ -19,6 +19,11 @@ export default function SettingsPage() {
         cod_premium: 10,
         online_discount: 5,
         rider_slot_limit: 10,
+        rider_max_orders: 15,
+        express_fee: 30,
+        scheduled_discount: 5,
+        shop_fssai: '',
+        refund_policy_text: '',
         vacation_mode: { is_closed: false },
         payment_vpa: 'merakirana@okaxis',
         voice_rate_limit_hourly: 3,
@@ -72,6 +77,11 @@ export default function SettingsPage() {
                 cod_premium: Number(dbSettings.cod_premium ?? 10),
                 online_discount: Number(dbSettings.online_discount ?? 5),
                 rider_slot_limit: Number(dbSettings.rider_slot_limit ?? 10),
+                rider_max_orders: Number(dbSettings.rider_max_orders ?? 15),
+                express_fee: Number(dbSettings.express_fee ?? 30),
+                scheduled_discount: Number(dbSettings.scheduled_discount ?? 5),
+                shop_fssai: String(dbSettings.shop_fssai ?? ''),
+                refund_policy_text: String(dbSettings.refund_policy_text ?? ''),
                 vacation_mode: dbSettings.vacation_mode || prev.vacation_mode,
                 payment_vpa: dbSettings.payment_vpa || prev.payment_vpa,
                 voice_rate_limit_hourly: Number(dbSettings.voice_rate_limit_hourly ?? 3),
@@ -107,6 +117,11 @@ export default function SettingsPage() {
                 cod_premium: settings.cod_premium,
                 online_discount: settings.online_discount,
                 rider_slot_limit: settings.rider_slot_limit,
+                rider_max_orders: settings.rider_max_orders,
+                express_fee: settings.express_fee,
+                scheduled_discount: settings.scheduled_discount,
+                shop_fssai: settings.shop_fssai,
+                refund_policy_text: settings.refund_policy_text,
                 vacation_mode: settings.vacation_mode,
                 operating_hours: operatingHours,
                 payment_vpa: settings.payment_vpa,
@@ -345,7 +360,78 @@ export default function SettingsPage() {
                     </div>
                 </div>
 
-                {/* 3. Day-Wise operating hours */}
+                {/* 3. Shop Identity & Policy (prints on WhatsApp bills) */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
+                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2 border-b pb-3">
+                        <Shield className="text-green-600" size={20} /> Shop Identity & Policy
+                    </h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">FSSAI Lic. No. (14-digit)</label>
+                            <input
+                                type="text"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm font-mono"
+                                placeholder="e.g. 11523998000123"
+                                value={settings.shop_fssai}
+                                onChange={e => setSettings({ ...settings, shop_fssai: e.target.value.replace(/\D/g, '').slice(0, 14) })}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Prints on every bill. Empty = hidden.</p>
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Refund / Replacement Policy (WhatsApp)</label>
+                            <textarea
+                                rows={3}
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition text-sm"
+                                placeholder="Spoilt item? Photo within 6 hours → free replacement or refund…"
+                                value={settings.refund_policy_text}
+                                onChange={e => setSettings({ ...settings, refund_policy_text: e.target.value })}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                {/* 4. Rider Capacity, Express & Pre-order */}
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
+                    <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2 border-b pb-3">
+                        <Clock className="text-green-600" size={20} /> Rider Capacity, Express & Pre-order
+                    </h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Orders per Rider per Slot</label>
+                            <input
+                                type="number" min="1" max="100"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                                value={settings.rider_max_orders}
+                                onChange={e => setSettings({ ...settings, rider_max_orders: Number(e.target.value) })}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Slot capacity = free riders × this. Full slots auto-hide.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">⚡ Express 10-min Fee (₹)</label>
+                            <input
+                                type="number" min="0"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                                value={settings.express_fee}
+                                onChange={e => setSettings({ ...settings, express_fee: Number(e.target.value) })}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Shown only when a rider is free. 0 = hidden.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">📅 Pre-order Discount (%)</label>
+                            <input
+                                type="number" min="0" max="30"
+                                className="w-full border border-gray-200 p-3 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none transition"
+                                value={settings.scheduled_discount}
+                                onChange={e => setSettings({ ...settings, scheduled_discount: Number(e.target.value) })}
+                            />
+                            <p className="text-[11px] text-gray-400 mt-1">Off tomorrow slots. Helps you plan inventory.</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 5. Day-Wise operating hours */}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
                     <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2 border-b pb-3">
                         <Clock className="text-green-600" size={20} /> Operating Hours (Day-Wise Schedules)
