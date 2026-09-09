@@ -349,9 +349,9 @@ router.post('/whatsapp', async (req, res) => {
             MR: "💵 कॅश ऑन डिलिव्हरी"
         },
         FALLBACK: {
-            EN: `Welcome to *Mera Kirana*! 🏪\n\nI couldn't quite catch that. Tap below to browse products or view orders:`,
-            HI: `*मेरा किराना* में आपका स्वागत है! 🏪\n\nमुझे ठीक से समझ नहीं आया। उत्पादों को देखने या अपने ऑर्डर देखने के लिए नीचे टैप करें:`,
-            MR: `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\nमला नीट समजले नाही. उत्पादने पाहण्यासाठी किंवा तुमच्या ऑर्डर्स पाहण्यासाठी खाली टॅप करा:`
+            EN: `Welcome to *Mera Kirana*! 🏪\n\nI work with taps, not typing — tap below, or send a *voice note* (e.g. "200 gm paneer, Bhandup 400078, evening"):`,
+            HI: `*मेरा किराना* में आपका स्वागत है! 🏪\n\nमैं टाइपिंग से नहीं, टैप से काम करता हूँ — नीचे टैप करें, या *वॉइस नोट* भेजें (जैसे "200 ग्राम पनीर, भांडुप 400078, शाम"):`,
+            MR: `*मेरा किराना* मध्ये आपले स्वागत आहे! 🏪\n\nमी टायपिंगने नाही, टॅपने काम करतो — खाली टॅप करा किंवा *व्हॉइस नोट* पाठवा (उदा. "200 ग्रॅम पनीर, भांडुप 400078, संध्याकाळ"):`
         },
         DRAFT_PROMPT: {
             EN: `👋 We noticed you have an active order draft in progress!\n\nWould you like to resume checkout or browse the catalog to add more items?`,
@@ -2068,13 +2068,8 @@ Rules:
                     const newAddr = await db.query('INSERT INTO addresses (customer_id, address_text, pincode, is_default) VALUES ($1, $2, $3, true) RETURNING address_id', [customerId, text, pin]);
                     
                     metadata.address_id = newAddr.rows[0].address_id;
-                    metadata.stage = 'DELIVERY_SLOT_SELECTION';
-                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
-                    
-                    const buttons = [
-                        { id: 'btn_addr_select_' + newAddr.rows[0].address_id, title: '🚚 Process Delivery Slot' }
-                    ];
-                    await whatsappService.sendButtons(from, "✅ *Address Saved!* Tap button below to select delivery slots:", buttons);
+                    await whatsappService.sendText(from, "✅ *Address Saved!*");
+                    await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
                 } else {
                     await whatsappService.sendText(from, "Please type a full delivery address including a valid 6-digit postal pincode (e.g., 400078) so we can check serviceability.");
                 }
