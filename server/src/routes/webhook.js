@@ -2074,9 +2074,9 @@ Rules:
                 let a = interactive.address_message || {};
                 if ((!a || !a.in_pin_code) && interactive.nfm_reply) {
                     try {
-                        const flow = typeof interactive.nfm_reply.response_json === 'string'
-                            ? JSON.parse(interactive.nfm_reply.response_json)
-                            : (interactive.nfm_reply.response_json || {});
+                        const rawRj = interactive.nfm_reply.response_json;
+                        const flow = typeof rawRj === 'string' ? JSON.parse(rawRj) : (rawRj || {});
+                        console.log('nfm_reply payload keys:', Object.keys(flow), 'hasPinValue:', /\b\d{6}\b/.test(JSON.stringify(flow)));
                         const pick = (...keys) => {
                             for (const k of keys) {
                                 if (flow[k] != null && String(flow[k]).trim() !== '') return String(flow[k]).trim();
@@ -2092,6 +2092,11 @@ Rules:
                             city: pick('city', 'town'),
                             in_pin_code: pick('in_pin_code', 'pin_code', 'pincode', 'pinCode', 'postal_code', 'postalCode', 'zip'),
                         };
+                        // Last resort: any 6-digit number anywhere in the payload (key names vary by Flow version)
+                        if (!a.in_pin_code) {
+                            const anywhere = JSON.stringify(flow).match(/\b\d{6}\b/);
+                            if (anywhere) a.in_pin_code = anywhere[0];
+                        }
                     } catch (parseErr) {
                         logError(parseErr, 'nfm_reply_parse');
                     }
