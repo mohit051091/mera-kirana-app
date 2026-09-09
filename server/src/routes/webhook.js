@@ -2066,9 +2066,43 @@ Rules:
             }
 
             // Interactive address message responses
-            if (interactive && interactive.type === 'address_message') {
-                const a = interactive.address_message;
-                const pin = a.in_pin_code;
+            if (interactive && interactive.type && !interactive.button_reply && !interactive.list_reply && interactive.type !== 'address_message') {
+                console.log('Unknown interactive type:', interactive.type, 'keys:', Object.keys(interactive));
+            }
+            if (interactive && (interactive.type === 'address_message' || interactive.type === 'nfm_reply' || interactive.nfm_reply)) {
+                // Normalize: Cloud API address reply OR Flow (nfm_reply) payload
+                let a = interactive.address_message || {};
+                if ((!a || !a.in_pin_code) && interactive.nfm_reply) {
+                    try {
+                        const flow = typeof interactive.nfm_reply.response_json === 'string'
+                            ? JSON.parse(interactive.nfm_reply.response_json)
+                            : (interactive.nfm_reply.response_json || {});
+                        const pick = (...keys) => {
+                            for (const k of keys) {
+                                if (flow[k] != null && String(flow[k]).trim() !== '') return String(flow[k]).trim();
+                                const found = Object.keys(flow).find(fk => fk.toLowerCase() === k.toLowerCase());
+                                if (found && String(flow[found]).trim() !== '') return String(flow[found]).trim();
+                            }
+                            return null;
+                        };
+                        a = {
+                            house_number: pick('house_number', 'houseNumber', 'house'),
+                            building_name: pick('building_name', 'buildingName', 'building', 'society'),
+                            address: pick('address', 'street', 'street_address', 'address_line1', 'locality', 'area'),
+                            city: pick('city', 'town'),
+                            in_pin_code: pick('in_pin_code', 'pin_code', 'pincode', 'pinCode', 'postal_code', 'postalCode', 'zip'),
+                        };
+                    } catch (parseErr) {
+                        logError(parseErr, 'nfm_reply_parse');
+                    }
+                }
+                const pinMatch = String(a.in_pin_code || '').match(/\b\d{6}\b/);
+                const pin = pinMatch ? pinMatch[0] : null;
+                if (!pin) {
+                    await whatsappService.sendText(from, 'I couldn\'t read the pincode from that form. Please try the address form again, or reply with your 6-digit pincode.');
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
 
                 // Validate serviceability
                 const pinMaster = await db.query('SELECT 1 FROM pincode_master WHERE pincode = $1 AND is_allowed = true LIMIT 1', [pin]);
