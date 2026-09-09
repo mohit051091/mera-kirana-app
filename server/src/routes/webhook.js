@@ -53,6 +53,54 @@ function getOggOpusDuration(buffer) {
     return Number(granulePosition) / Number(sampleRate);
 }
 
+// Helper: parse a weight label into grams ("200 gm"->200, "1 kg"->1000). Null if unparseable.
+function weightToGrams(label) {
+    if (!label) return null;
+    const m = String(label).toLowerCase().replace(/,/g, '').match(/([\d.]+)\s*(kg|gms?|ml|ltr|litres?|liters?)?/);
+    if (!m) return null;
+    const val = parseFloat(m[1]);
+    if (!val || val <= 0) return null;
+    const unit = m[2] || 'g';
+    if (unit.startsWith('kg')) return Math.round(val * 1000);
+    if (unit.startsWith('ltr') || unit === 'l' || unit.startsWith('lit')) return Math.round(val * 1000); // milk litres ~ grams
+    if (unit.startsWith('ml')) return Math.round(val);
+    return Math.round(val); // g / gm default
+}
+
+// Helper: split a target weight into available pack sizes (greedy largest-first, exact only).
+// packs: [{variant_id, grams, price}] → returns [{variant_id, grams, price, count}] or null if no exact combo.
+function decomposeGrams(targetG, packs) {
+    const usable = packs.filter(p => p.grams && p.grams > 0).sort((a, b) => b.grams - a.grams);
+    if (!usable.length || !targetG || targetG <= 0) return null;
+    let rest = targetG;
+    const out = [];
+    for (const p of usable) {
+        const c = Math.floor(rest / p.grams);
+        if (c > 0) { out.push({ ...p, count: c }); rest -= c * p.grams; }
+        if (rest === 0) break;
+    }
+    return rest === 0 ? out : null;
+}
+
+// Helper: requested quantity → grams (qty_unit: grams|kg|packets|pieces). Null = count-based fallback.
+function itemToGrams(item) {
+    if (!item) return null;
+    if (item.qty_value != null && item.qty_unit) {
+        const v = parseFloat(item.qty_value);
+        if (!v || v <= 0) return null;
+        const u = String(item.qty_unit).toLowerCase();
+        if (u.startsWith('kg')) return Math.round(v * 1000);
+        if (u.startsWith('gram') || u === 'g' || u.startsWith('gm')) return Math.round(v);
+        return null; // packets/pieces → count fallback
+    }
+    // Legacy shape {"quantity": n}: treat 50..10000 as grams (voice "200 grams"), else count
+    if (item.quantity != null) {
+        const q = parseFloat(item.quantity);
+        if (q >= 50 && q <= 10000) return Math.round(q);
+    }
+    return null;
+}
+
 // Helper: calculate cart subtotal with voice cost markup
 async function getCartSubtotal(cartId) {
     const totalRes = await db.query(`
@@ -823,7 +871,7 @@ You are a structured parser for a kirana dairy shop. You extract order items, ad
 You MUST output a raw JSON object matching this schema ONLY.
 
 {
-  "items": [{"name": "string", "quantity": "number"}],
+  "items": [{"name": "string", "qty_value": "number", "qty_unit": "grams|kg|packets|pieces"}],
   "address": {"street": "string", "pincode": "string"},
   "delivery_slot": {"date": "string", "slot": "string"}
 }
@@ -835,10 +883,13 @@ Catalog Products & Synonyms:
 - Paneer (cottage cheese, paneer block)
 - Clarified Butter (ghee, cow ghee, pure ghee)
 
-Quantity mapping:
-- "aadha kilo" / "half kg" = 500g or 0.5 kg
-- "pao kilo" / "quarter kg" = 250g
-- "ek packet" = 1 unit
+Quantity mapping (output qty_value + qty_unit, NEVER convert yourself):
+- "aadha kilo" / "half kg" = {"qty_value": 0.5, "qty_unit": "kg"}
+- "pao kilo" / "quarter kg" = {"qty_value": 250, "qty_unit": "grams"}
+- "200 grams paneer" = {"name": "Paneer", "qty_value": 200, "qty_unit": "grams"}
+- "1 kg mawa" = {"name": "Mawa", "qty_value": 1, "qty_unit": "kg"}
+- "ek packet" / "2 packets" = {"qty_value": 1|2, "qty_unit": "packets"} (no weight mentioned)
+- No quantity mentioned = {"qty_value": 1, "qty_unit": "packets"}
 
 Rules:
 1. Map items to catalog names. If empty/unclear, set items to [].
@@ -878,25 +929,59 @@ Rules:
             }
 
             // If voice parsed successfully: apply updates
+            const addedLines = [];   // grouped display: "Mawa 1 kg = 2 x 500 gm"
+            const skippedLines = []; // honest failures with available sizes
             if (voiceParsed) {
-                // Parse items
+                // Parse items (weight-aware: decompose into available packs)
                 if (voiceParsed.items && voiceParsed.items.length > 0) {
                     for (const item of voiceParsed.items) {
-                        // Resolve variant in database using fuzzy/wildcard match
-                        const query = `
-                            SELECT pv.variant_id 
+                        // All active variants of the matched product
+                        const varRes = await db.query(`
+                            SELECT pv.variant_id, pv.weight_label, pv.price
                             FROM product_variants pv
                             JOIN products p ON pv.product_id = p.product_id
                             WHERE p.base_name ILIKE '%' || $1 || '%' AND pv.is_active = true
-                            LIMIT 1
-                        `;
-                        const resVar = await db.query(query, [item.name]);
-                        if (resVar.rows.length > 0) {
-                            await db.query(
-                                'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3) ON CONFLICT (cart_id, variant_id) DO UPDATE SET quantity = cart_items.quantity + $3',
-                                [cartId, resVar.rows[0].variant_id, item.quantity || 1]
-                            );
+                            ORDER BY pv.price ASC
+                        `, [item.name]);
+                        if (resVar.rows.length === 0) {
+                            skippedLines.push(`• ${item.name} — not on our menu`);
+                            continue;
                         }
+                        const variants = resVar.rows.map(r => ({
+                            variant_id: r.variant_id,
+                            grams: weightToGrams(r.weight_label),
+                            price: parseFloat(r.price),
+                            label: r.weight_label,
+                        }));
+                        const targetG = itemToGrams(item);
+                        if (targetG && variants.every(v => v.grams)) {
+                            const combo = decomposeGrams(targetG, variants);
+                            if (combo) {
+                                let comboTotal = 0;
+                                const parts = [];
+                                for (const c of combo) {
+                                    await db.query(
+                                        'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3) ON CONFLICT (cart_id, variant_id) DO UPDATE SET quantity = cart_items.quantity + $3',
+                                        [cartId, c.variant_id, c.count]
+                                    );
+                                    comboTotal += c.price * c.count;
+                                    parts.push(`${c.count} x ${c.label}`);
+                                }
+                                const prettyKg = targetG >= 1000 ? `${(targetG / 1000).toString().replace(/\.0$/, '')} kg` : `${targetG} gm`;
+                                addedLines.push(`• ${item.name} ${prettyKg} = ${parts.join(' + ')} → *₹${comboTotal.toFixed(2)}*`);
+                                continue;
+                            }
+                            const sizes = variants.map(v => v.label).join(', ');
+                            skippedLines.push(`• ${item.name} ${targetG}gm — no pack combo (have: ${sizes})`);
+                            continue;
+                        }
+                        // Count-based fallback (packets / unparseable weights): first variant x count
+                        const count = Math.min(Math.max(parseInt(item.qty_value ?? item.quantity, 10) || 1, 1), 20);
+                        await db.query(
+                            'INSERT INTO cart_items (cart_id, variant_id, quantity) VALUES ($1, $2, $3) ON CONFLICT (cart_id, variant_id) DO UPDATE SET quantity = cart_items.quantity + $3',
+                            [cartId, variants[0].variant_id, count]
+                        );
+                        addedLines.push(`• ${item.name} (${variants[0].label}) x ${count}`);
                     }
                 }
 
@@ -974,7 +1059,12 @@ Rules:
                 } else {
                     // Send cart summary and request next details
                     let updateMsg = "";
-                    if (voiceParsed.items && voiceParsed.items.length > 0) {
+                    if (addedLines.length > 0) {
+                        updateMsg = `✅ *Added to cart:*\n${addedLines.join('\n')}\n_Subtotal: ₹${subtotal.toFixed(2)}_`;
+                        if (skippedLines.length > 0) updateMsg += `\n\n⚠️ _Couldn't add:_\n${skippedLines.join('\n')}`;
+                    } else if (skippedLines.length > 0) {
+                        updateMsg = `⚠️ *Couldn't match your items:*\n${skippedLines.join('\n')}\n\nTry our pack sizes or type the item name.`;
+                    } else if (voiceParsed.items && voiceParsed.items.length > 0) {
                         updateMsg = `✅ *Items Added to Cart!* (Subtotal: ₹${subtotal.toFixed(2)})`;
                     } else if (voiceParsed.address && voiceParsed.address.pincode) {
                         updateMsg = `📍 *Delivery Address Saved!* (Pincode: ${voiceParsed.address.pincode})`;
