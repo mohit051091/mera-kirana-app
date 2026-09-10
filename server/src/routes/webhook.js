@@ -337,6 +337,40 @@ async function addressFormValues(customerId, from) {
     return values;
 }
 
+// Helper: subscription confirm screen (product + qty + frequency + address, then Confirm/Cancel)
+async function showSubConfirm(from, customerId, metadata, cartId, userLang) {
+    const vRes = await db.query(
+        `SELECT pv.weight_label, pv.price, p.base_name FROM product_variants pv
+         JOIN products p ON pv.product_id = p.product_id WHERE pv.variant_id = $1 AND pv.is_active = true`,
+        [metadata.sub_variant_id]
+    );
+    if (!vRes.rows.length) {
+        await whatsappService.sendText(from, 'That product is no longer available. Please choose another.');
+        return;
+    }
+    const addrRes = await db.query('SELECT address_id, address_text FROM addresses WHERE customer_id = $1 AND is_default = true LIMIT 1', [customerId]);
+    if (!addrRes.rows.length) {
+        // No address on file: collect it first, then come back here
+        metadata.pending_sub = true;
+        metadata.stage = 'SUB_ADDRESS';
+        await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+        await whatsappService.sendAddressMessage(from, '🏠 *Where should the subscription deliver?*', await addressFormValues(customerId, from));
+        return;
+    }
+    metadata.stage = 'SUB_CONFIRM';
+    metadata.sub_address_id = addrRes.rows[0].address_id;
+    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+    const v = vRes.rows[0];
+    const freqLabel = { DAILY: 'day', ALTERNATE: 'alternate day', WEEKLY: 'week', MONTHLY: 'month' }[metadata.sub_frequency] || metadata.sub_frequency;
+    const perDelivery = parseFloat(v.price) * metadata.sub_quantity;
+    const text = `📅 *Confirm Subscription:*\n\n• ${v.base_name} (${v.weight_label}) x ${metadata.sub_quantity} = *₹${perDelivery.toFixed(2)}* per delivery\n• Every *${freqLabel}*, starting tomorrow\n• Deliver to: ${addrRes.rows[0].address_text}\n\nStart this plan?`;
+    const buttons = [
+        { id: 'btn_sub_confirm', title: '✅ Start Plan' },
+        { id: 'btn_sub_cancel', title: '❌ Cancel' }
+    ];
+    await whatsappService.sendButtons(from, text, buttons);
+}
+
 // Helper: address step — 1 saved address skips straight to slots (no question asked)
 async function promptAddressStep(from, customerId, metadata, cartId) {
     metadata.stage = 'ADDRESS_SELECTION';
@@ -1478,33 +1512,84 @@ Rules:
                     }
                     const variantId = metadata.sub_variant_id;
                     if (!variantId) { await whatsappService.markAsRead(messageId); return; }
-                    const variantCheck = await db.query('SELECT 1 FROM product_variants WHERE variant_id = $1 AND is_active = true', [variantId]);
+                    const variantCheck = await db.query('SELECT weight_label, price FROM product_variants WHERE variant_id = $1 AND is_active = true', [variantId]);
                     if (variantCheck.rows.length === 0) {
                         await whatsappService.sendText(from, "That product is no longer available. Please choose another.");
                         await whatsappService.markAsRead(messageId);
                         return;
                     }
-                    
+                    // Stash frequency — quantity comes next, nothing is created yet
+                    metadata.sub_frequency = frequency;
+                    metadata.stage = 'SUB_CHOOSE_QTY';
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    const v = variantCheck.rows[0];
+                    const buttons = [
+                        { id: 'btn_sub_qty_1', title: `×1 (₹${parseFloat(v.price).toFixed(0)})` },
+                        { id: 'btn_sub_qty_2', title: `×2 (₹${(parseFloat(v.price) * 2).toFixed(0)})` },
+                        { id: 'btn_sub_qty_3', title: `×3 (₹${(parseFloat(v.price) * 3).toFixed(0)})` }
+                    ];
+                    await whatsappService.sendButtons(from, `How many *${v.weight_label}* packs per delivery?\n(Need 4 or more? Just reply with the number, e.g. 5)`, buttons);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId.startsWith('btn_sub_qty_')) {
+                    const qty = parseInt(buttonId.replace('btn_sub_qty_', ''), 10);
+                    if (!Number.isInteger(qty) || qty < 1 || qty > 50 || !metadata.sub_variant_id || !metadata.sub_frequency) {
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                    metadata.sub_quantity = qty;
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    await showSubConfirm(from, customerId, metadata, cartId, userLang);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId === 'btn_sub_confirm') {
+                    const { sub_variant_id: vid, sub_frequency: freq, sub_quantity: qty } = metadata;
+                    if (!vid || !['DAILY', 'WEEKLY', 'ALTERNATE', 'MONTHLY'].includes(freq) || !Number.isInteger(qty) || qty < 1 || qty > 50) {
+                        await whatsappService.sendText(from, 'This plan expired. Please start a new subscription.');
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
+                    const variantCheck = await db.query('SELECT weight_label, price, p.base_name FROM product_variants pv JOIN products p ON pv.product_id = p.product_id WHERE pv.variant_id = $1 AND pv.is_active = true', [vid]);
+                    if (variantCheck.rows.length === 0) {
+                        await whatsappService.sendText(from, "That product is no longer available. Please choose another.");
+                        await whatsappService.markAsRead(messageId);
+                        return;
+                    }
                     const tomorrow = new Date();
                     tomorrow.setDate(tomorrow.getDate() + 1);
                     const dateStr = tomorrow.toISOString().split('T')[0];
-                    
                     await db.query(`
                         INSERT INTO subscriptions (customer_id, variant_id, quantity, frequency, status, next_delivery_date)
                         VALUES ($1, $2, $3, $4, $5, $6)
-                    `, [customerId, variantId, 1, frequency, 'ACTIVE', dateStr]);
-                    
+                    `, [customerId, vid, qty, freq, 'ACTIVE', dateStr]);
+
+                    const v = variantCheck.rows[0];
                     metadata.stage = 'START';
-                    metadata.sub_variant_id = null;
+                    delete metadata.sub_variant_id; delete metadata.sub_frequency; delete metadata.sub_quantity;
+                    delete metadata.pending_sub; delete metadata.sub_address_id;
                     await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
-                    
+
+                    const freqWord = { DAILY: 'day', ALTERNATE: 'alternate day', WEEKLY: 'week', MONTHLY: 'month' }[freq];
                     const successText = userLang === 'HI'
-                        ? `🎉 *सदस्यता सफल!*\n\nआपकी आवर्ती डिलीवरी सफलतापूर्वक सेट हो गई है। पहली डिलीवरी कल होगी!`
+                        ? `🎉 *सदस्यता सफल!*\n\n${v.base_name} (${v.weight_label}) x ${qty} — हर ${freqWord}, पहली डिलीवरी कल!`
                         : (userLang === 'MR'
-                            ? `🎉 *वर्गणी यशस्वी!*\n\nतुमची डिलिव्हरी यशस्वीरित्या सेट केली गेली आहे. पहिली डिलिव्हरी उद्या होईल!`
-                            : `🎉 *Subscription Created Successfully!*\n\nYour recurring shipment has been set up. Your first delivery is scheduled for tomorrow!`);
-                            
+                            ? `🎉 *वर्गणी यशस्वी!*\n\n${v.base_name} (${v.weight_label}) x ${qty} — दर ${freqWord}, पहिली डिलिव्हरी उद्या!`
+                            : `🎉 *Subscription Active!*\n\n${v.base_name} (${v.weight_label}) x ${qty} — every ${freqWord}, first delivery tomorrow!`);
                     await whatsappService.sendText(from, successText);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+
+                if (buttonId === 'btn_sub_cancel') {
+                    delete metadata.sub_variant_id; delete metadata.sub_frequency; delete metadata.sub_quantity;
+                    delete metadata.pending_sub; delete metadata.sub_address_id;
+                    metadata.stage = 'START';
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    await whatsappService.sendText(from, 'No problem — nothing was subscribed. Tap Subscriptions anytime to start a plan.');
                     await whatsappService.markAsRead(messageId);
                     return;
                 }
@@ -2146,9 +2231,15 @@ Rules:
                 metadata.stage = 'DELIVERY_SLOT_SELECTION';
                 await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
 
-                // Prompt delivery slot select directly (no extra tap)
+                // Prompt delivery slot select directly (no extra tap) — or back to subscription confirm
                 await whatsappService.sendText(from, '✅ *Address Saved!*');
-                await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
+                if (metadata.pending_sub) {
+                    delete metadata.pending_sub;
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    await showSubConfirm(from, customerId, metadata, cartId, userLang);
+                } else {
+                    await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
+                }
                 await whatsappService.markAsRead(messageId);
                 return;
             }
@@ -2262,6 +2353,18 @@ Rules:
                 }
             }
 
+            // Subscription quantity as plain number (4+ packs): constrained data, not conversation
+            if (type === 'text' && metadata.stage === 'SUB_CHOOSE_QTY' && /^\d{1,2}$/.test(text.trim())) {
+                const qty = parseInt(text.trim(), 10);
+                if (qty >= 1 && qty <= 50 && metadata.sub_variant_id && metadata.sub_frequency) {
+                    metadata.sub_quantity = qty;
+                    await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                    await showSubConfirm(from, customerId, metadata, cartId, userLang);
+                    await whatsappService.markAsRead(messageId);
+                    return;
+                }
+            }
+
             // Normal text fallback state capture (e.g. entering address via text instead of location pin)
             if (type === 'text' && metadata.stage === 'ADDRESS_SELECTION') {
                 const pinMatch = text.match(/\b\d{6}\b/);
@@ -2289,7 +2392,13 @@ Rules:
                     metadata.address_id = newAddr.rows[0].address_id;
                     delete metadata.pending_street;
                     await whatsappService.sendText(from, "✅ *Address Saved!*");
-                    await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
+                    if (metadata.pending_sub) {
+                        delete metadata.pending_sub;
+                        await db.query('UPDATE carts SET session_metadata = $1 WHERE cart_id = $2', [metadata, cartId]);
+                        await showSubConfirm(from, customerId, metadata, cartId, userLang);
+                    } else {
+                        await sendSlotList(from, newAddr.rows[0].address_id, metadata, cartId);
+                    }
                 } else {
                     await whatsappService.sendText(from, "I need your delivery address with a 6-digit pincode — the form below is fastest (phone already filled):");
                     const buttons = [
